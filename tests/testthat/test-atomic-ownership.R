@@ -410,16 +410,26 @@ test_that("empty taxonomy diagnostics are cleaned without removing the shared ro
 })
 
 test_that("empty taxonomy diagnostics cleanup quotes paths with spaces and shell metacharacters", {
-  root <- file.path(tempdir(), "diagnostics cleanup & [shell]")
+  root <- tempfile("diagnostics cleanup ")
   dir.create(root, recursive = TRUE, showWarnings = FALSE)
   on.exit(unlink(root, recursive = TRUE, force = TRUE), add = TRUE)
-  final_root <- file.path(root, "published output")
-  diagnostics <- create_taxonomy_diagnostics_dir(final_root, new_transaction_id())
-  diagnostics_root <- dirname(diagnostics)
+  # These characters are legal filenames on both supported platforms.
+  # Percent expansion and delayed expansion in cmd.exe are separate concerns.
+  names <- c("spaces & [shell]", "apostrophe's path", "dollar $HOME", "backtick `literal`")
+  for (name in names) {
+    parent <- file.path(root, name)
+    dir.create(parent, recursive = TRUE)
+    sentinel <- file.path(parent, "preserve.txt")
+    writeLines("preserve sibling evidence", sentinel)
+    final_root <- file.path(parent, "published output")
+    diagnostics <- create_taxonomy_diagnostics_dir(final_root, new_transaction_id())
+    diagnostics_root <- dirname(diagnostics)
 
-  expect_true(cleanup_empty_taxonomy_diagnostics(diagnostics, diagnostics_root))
-  expect_false(dir.exists(diagnostics))
-  expect_true(dir.exists(diagnostics_root))
+    expect_true(cleanup_empty_taxonomy_diagnostics(diagnostics, diagnostics_root), info = name)
+    expect_false(dir.exists(diagnostics), info = name)
+    expect_true(dir.exists(diagnostics_root), info = name)
+    expect_identical(readLines(sentinel), "preserve sibling evidence", info = name)
+  }
 })
 
 test_that("taxonomy diagnostics evidence and unexpected entries are retained", {
