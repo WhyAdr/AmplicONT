@@ -5,6 +5,8 @@
 source(file.path("..", "..", "analysis", "utils", "config.R"))
 source(file.path("..", "..", "analysis", "utils", "classifier_contract.R"))
 source(file.path("..", "..", "analysis", "utils", "io.R"))
+source(file.path("..", "..", "analysis", "utils", "plotting.R"))
+source(file.path("..", "..", "analysis", "01_qc_diagnostics.R"))
 
 test_that("parse_kraken_report parses standard 6-column reports and computes totals", {
   lines <- c(
@@ -203,4 +205,79 @@ test_that("build_context loads synthetic kraken2 fixture cleanly", {
   expect_equal(acc$U, 20)
   expect_equal(acc$E, 28)
   expect_equal(acc$D, 2)
+})
+
+test_that("run_qc runs cleanly on synthetic kraken2 with assignments", {
+  fixture_dir <- file.path("..", "..", "tests", "fixtures", "synthetic_kraken2")
+  cfg_path <- file.path(fixture_dir, "config.yml")
+  cfg <- load_config(cfg_path)
+  tmp_out <- tempfile("kraken_qc_out_")
+  dir.create(tmp_out, recursive = TRUE)
+  on.exit(unlink(tmp_out, recursive = TRUE), add = TRUE)
+  cfg$output$base_dir <- tmp_out
+  cfg$output$dirs <- list(qc = file.path(tmp_out, "01_QC"))
+
+  ctx <- build_context(cfg)
+  res <- run_qc(ctx)
+  expect_equal(res$status, "completed")
+
+  qc_dir <- cfg$output$dirs$qc
+  expect_true(file.exists(file.path(qc_dir, "00_read_accounting.tsv")))
+  expect_true(file.exists(file.path(qc_dir, "00_read_investigation.tsv")))
+  expect_true(file.exists(file.path(qc_dir, "classification_reconciliation.tsv")))
+  expect_true(file.exists(file.path(qc_dir, "sample1", "00a_read_accounting_donut.png")))
+  expect_true(file.exists(file.path(qc_dir, "sample1", "01a_classification_donut.png")))
+  expect_true(file.exists(file.path(qc_dir, "sample1", "01b_read_length_distribution.png")))
+  expect_true(file.exists(file.path(qc_dir, "sample1", "01c_qc_filter_diagnostic.png")))
+  expect_true(file.exists(file.path(qc_dir, "sample1", "01d_read_length_violin.png")))
+
+  acc_df <- read.delim(file.path(qc_dir, "00_read_accounting.tsv"), check.names = FALSE)
+  expect_equal(acc_df$Classifier, "kraken2")
+  expect_equal(acc_df$RawTotal_N, 50L)
+  expect_equal(acc_df$RawClassified_C, 30L)
+  expect_equal(acc_df$RawUnclassified_U, 20L)
+  expect_equal(acc_df$BrackenEstimate_E, 28L)
+  expect_equal(acc_df$AbundanceSum_T, 48L)
+  expect_equal(acc_df$Difference_D, 2L)
+  expect_true(acc_df$AssignmentAvailable)
+  expect_true(acc_df$AssignmentVerified)
+
+  recon_df <- read.delim(file.path(qc_dir, "classification_reconciliation.tsv"), check.names = FALSE)
+  expect_true(recon_df$ReconciliationPass)
+  expect_equal(recon_df$Difference_D, 2L)
+
+  inv_df <- read.delim(file.path(qc_dir, "00_read_investigation.tsv"), check.names = FALSE)
+  expect_false(inv_df$BamstatsAvailable)
+  expect_true(is.na(inv_df$BamstatsC0Matched))
+})
+
+test_that("run_qc runs cleanly on synthetic kraken2 without assignments", {
+  fixture_dir <- file.path("..", "..", "tests", "fixtures", "synthetic_kraken2")
+  cfg_path <- file.path(fixture_dir, "config.yml")
+  cfg <- load_config(cfg_path)
+  tmp_out <- tempfile("kraken_qc_noasgn_")
+  dir.create(tmp_out, recursive = TRUE)
+  on.exit(unlink(tmp_out, recursive = TRUE), add = TRUE)
+  cfg$output$base_dir <- tmp_out
+  cfg$output$dirs <- list(qc = file.path(tmp_out, "01_QC"))
+  cfg$input$assignments <- NULL
+
+  ctx <- build_context(cfg)
+  res <- run_qc(ctx)
+  expect_equal(res$status, "completed")
+
+  qc_dir <- cfg$output$dirs$qc
+  acc_df <- read.delim(file.path(qc_dir, "00_read_accounting.tsv"), check.names = FALSE)
+  expect_false(acc_df$AssignmentAvailable)
+  expect_true(is.na(acc_df$RawC))
+  expect_true(is.na(acc_df$RawU))
+  expect_equal(acc_df$RawTotal_N, 50L)
+  expect_equal(acc_df$RawClassified_C, 30L)
+  expect_equal(acc_df$RawUnclassified_U, 20L)
+  expect_equal(acc_df$BrackenEstimate_E, 28L)
+  expect_equal(acc_df$Difference_D, 2L)
+
+  recon_df <- read.delim(file.path(qc_dir, "classification_reconciliation.tsv"), check.names = FALSE)
+  expect_false(recon_df$AssignmentAvailable)
+  expect_true(recon_df$ReconciliationPass)
 })

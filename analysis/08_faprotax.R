@@ -442,6 +442,11 @@ run_faprotax <- function(context) {
     database = "FAPROTAX",
     database_source = "microeco embedded data object prok_func_FAPROTAX",
     abundance_model = "sum of classified taxon counts carrying each function",
+    count_basis = context$count_basis %||% (if (identical(context$upstream_contract$classifier, "kraken2")) {
+      "bracken_species_estimates"
+    } else {
+      "minimap2_alignments"
+    }),
     input_filter = list(
       included_superkingdoms = c("Bacteria", "Archaea"),
       excluded_rows = c("canonical unclassified", "classified non-prokaryotic"),

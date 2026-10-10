@@ -368,7 +368,7 @@ match_bracken_to_abundance <- function(bracken_data, count_matrix, taxonomy_df,
     b_est <- as.numeric(row$new_est_reads)
 
     # Resolve assignment lineage for this TaxID
-    as_lineage <- taxid_map[[tid]]
+    as_lineage <- if (!is.null(taxid_map) && tid %in% names(taxid_map)) taxid_map[[tid]] else NULL
     if (is.null(as_lineage) || !nzchar(as_lineage)) {
       # When assignments are absent or TaxID not in assignments,
       # attempt exact species match in taxonomy_df if unique

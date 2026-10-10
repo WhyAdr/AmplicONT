@@ -119,6 +119,7 @@ run_kreport <- function(context, resolver_runner = NULL) {
     "--mode", network_mode,
     "--email-env", cfg$taxonomy$email_env,
     "--api-key-env", cfg$taxonomy$api_key_env,
+    "--classifier", context$upstream_contract$classifier %||% "minimap2",
     "--unresolved-policy", unresolved_policy,
     "--unresolved-tsv", unresolved_tsv,
     "--conflicts-tsv", conflicts_tsv,
@@ -510,8 +511,13 @@ run_kreport <- function(context, resolver_runner = NULL) {
         sankey_enabled = isTRUE(pavian_sankey_enabled),
         sankey_html = isTRUE(pavian_sankey_render_html)
       ),
-      count_model = "direct abundance-table taxon counts plus canonical unclassified count",
-      denominator = "TotalReads",
+      count_model = if (identical(context$upstream_contract$classifier, "kraken2")) {
+        "bracken species estimates plus canonical unclassified count"
+      } else {
+        "direct abundance-table taxon counts plus canonical unclassified count"
+      },
+      denominator = if (identical(context$upstream_contract$classifier, "kraken2")) "T" else "TotalReads",
+      count_basis = context$count_basis %||% "minimap2_alignments",
       classified_definition = "sum of direct positive-count classified taxonomy rows",
       taxonomy_resolution = list(
         path = krona_artifact_relpath(res_summary_file, cfg$output$base_dir),
@@ -526,7 +532,7 @@ run_kreport <- function(context, resolver_runner = NULL) {
         ranks = json_array(pavian_sankey_cfg$ranks),
         max_taxa_per_rank = as.integer(sankey_max_n),
         count_model = "classified clade-read flow with persistent explicit residual lanes",
-        denominator = "TotalReads",
+        denominator = if (identical(context$upstream_contract$classifier, "kraken2")) "T" else "TotalReads",
         html_status = if (pavian_sankey_render_html) "rendered" else "not_requested"
       ),
       samples = json_array(pavian_records)
@@ -570,8 +576,13 @@ run_kreport <- function(context, resolver_runner = NULL) {
       },
       html_status = html_status,
       standalone_html = isTRUE(html_rendered),
-      count_model = "direct abundance-table taxon counts plus canonical unclassified count",
-      denominator = "TotalReads",
+      count_model = if (identical(context$upstream_contract$classifier, "kraken2")) {
+        "bracken species estimates plus canonical unclassified count"
+      } else {
+        "direct abundance-table taxon counts plus canonical unclassified count"
+      },
+      denominator = if (identical(context$upstream_contract$classifier, "kraken2")) "T" else "TotalReads",
+      count_basis = context$count_basis %||% "minimap2_alignments",
       classified_definition = "sum of direct positive-count classified taxonomy rows",
       requested_executable = krona_requested_executable,
       resolved_executable = if (html_rendered) {

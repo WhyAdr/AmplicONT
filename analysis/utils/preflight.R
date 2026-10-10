@@ -87,6 +87,45 @@ inventory_inputs <- function(cfg, bamstats = NULL) {
   }
   records$assignments <- assignment_records
 
+  if (!is.null(cfg$input$kraken2_reports)) {
+    k_reports <- cfg$input$kraken2_reports
+    k_records <- lapply(names(k_reports), function(sample_id) {
+      c(list(sample_id = sample_id), fingerprint_file(k_reports[[sample_id]],
+        sprintf("input.kraken2_reports.%s", sample_id)))
+    })
+    canonical_k <- vapply(k_records, `[[`, character(1), "path")
+    if (anyDuplicated(tolower(canonical_k))) {
+      preflight_error("E_DUPLICATE_INPUT", "one physical kraken2 report file is configured for multiple samples")
+    }
+    records$kraken2_reports <- k_records
+  }
+
+  if (!is.null(cfg$input$bracken_reports)) {
+    b_reports <- cfg$input$bracken_reports
+    b_records <- lapply(names(b_reports), function(sample_id) {
+      c(list(sample_id = sample_id), fingerprint_file(b_reports[[sample_id]],
+        sprintf("input.bracken_reports.%s", sample_id)))
+    })
+    canonical_b <- vapply(b_records, `[[`, character(1), "path")
+    if (anyDuplicated(tolower(canonical_b))) {
+      preflight_error("E_DUPLICATE_INPUT", "one physical bracken report file is configured for multiple samples")
+    }
+    records$bracken_reports <- b_records
+  }
+
+  if (!is.null(cfg$input$params_by_sample)) {
+    p_reports <- cfg$input$params_by_sample
+    p_records <- lapply(names(p_reports), function(sample_id) {
+      c(list(sample_id = sample_id), fingerprint_file(p_reports[[sample_id]],
+        sprintf("input.params_by_sample.%s", sample_id)))
+    })
+    canonical_p <- vapply(p_records, `[[`, character(1), "path")
+    if (anyDuplicated(tolower(canonical_p))) {
+      preflight_error("E_DUPLICATE_INPUT", "one physical params file is configured for multiple samples")
+    }
+    records$params_by_sample <- p_records
+  }
+
   bamstats <- bamstats %||% character(0)
   present <- names(bamstats)[!is.na(bamstats)]
   records$bamstats <- lapply(present, function(sample_id) {
@@ -103,6 +142,9 @@ assert_inputs_unchanged <- function(inventory, allow_taxonomy_cache_change = FAL
     inventory[c("config_file", "abundance_table", "params_json", "metadata", "taxonomy_cache",
                 "phylogenetic_tree", "phylogenetic_tip_map")],
     inventory$assignments,
+    inventory$kraken2_reports,
+    inventory$bracken_reports,
+    inventory$params_by_sample,
     inventory$bamstats
   )
   for (expected in Filter(Negate(is.null), flatten)) {
@@ -401,7 +443,7 @@ run_module_preflight <- function(context, modules, resolver_runner = NULL) {
         expected_rows, maximum_rows))
     }
   }
-  if ("qc" %in% modules) {
+  if ("qc" %in% modules && !identical(context$upstream_contract$classifier, "kraken2")) {
     for (sample_id in names(context$assignment_data)) {
       bamstats <- context$bamstats[[sample_id]]
       if (!is.null(bamstats) && !is.na(bamstats)) {
@@ -418,6 +460,7 @@ run_module_preflight <- function(context, modules, resolver_runner = NULL) {
     if (compile$status != 0L) preflight_error("E_KREPORT_PREFLIGHT", trimws(compile$stderr))
     args <- c(script, "--validate-only", "--abundance", cfg$input$abundance_table,
       "--tax-column", cfg$input$tax_column, "--cache", cfg$taxonomy$cache,
+      "--classifier", context$upstream_contract$classifier %||% "minimap2",
       "--mode", cfg$taxonomy$network_mode, "--email-env", cfg$taxonomy$email_env,
       "--api-key-env", cfg$taxonomy$api_key_env, "--unresolved-policy", cfg$taxonomy$unresolved_policy)
     if (isTRUE(cfg$cli$online_preflight)) args <- c(args, "--online-preflight")

@@ -27,7 +27,7 @@ main <- function() {
 
   source(file.path(script_dir, "utils", "dependencies.R"))
   check_dependencies()
-  for (file in c("cli.R", "config.R", "io.R", "metrics.R", "alpha_phylogeny.R", "plotting.R", "manifest.R",
+  for (file in c("cli.R", "config.R", "classifier_contract.R", "io.R", "metrics.R", "alpha_phylogeny.R", "plotting.R", "manifest.R",
                  "kreport.R", "atomic_io.R", "module_result.R", "preflight.R")) {
     source(file.path(script_dir, "utils", file))
   }
@@ -112,10 +112,20 @@ preflight_warnings <- tryCatch(run_module_preflight(context, requested_modules),
 tryCatch(assert_inputs_unchanged(full_inventory), error = function(e) fatal("Preflight error", e))
 
 if (isTRUE(cfg$cli$validate_only)) {
+  is_kraken <- identical(context$upstream_contract$classifier, "kraken2")
   summary <- list(
     status = "validated", pipeline_version = pipeline_version, mode = context$mode,
+    classifier = context$upstream_contract$classifier,
+    count_basis = context$count_basis,
     samples = unname(context$samples), requested_modules = unname(requested_modules),
-    total_reads = sum(context$sample_stats$TotalReads), lock_status = lock_info$lock_status,
+    total_reads = sum(context$sample_stats$TotalReads),
+    raw_reads_total = if (is_kraken) sum(vapply(context$sample_accounting, function(a) a$N, numeric(1))) else NULL,
+    classified_reads_total = if (is_kraken) sum(vapply(context$sample_accounting, function(a) a$C, numeric(1))) else NULL,
+    unclassified_reads_total = if (is_kraken) sum(vapply(context$sample_accounting, function(a) a$U, numeric(1))) else NULL,
+    species_estimates_total = if (is_kraken) sum(vapply(context$sample_accounting, function(a) a$E, numeric(1))) else NULL,
+    accounting_difference_total = if (is_kraken) sum(vapply(context$sample_accounting, function(a) a$D, numeric(1))) else NULL,
+    sample_accounting = if (is_kraken) context$sample_accounting else NULL,
+    lock_status = lock_info$lock_status,
     git_dirty = source_info$git_dirty, input_fingerprints = full_inventory,
     warnings = json_array(preflight_warnings)
   )
