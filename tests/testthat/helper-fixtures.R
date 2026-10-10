@@ -74,20 +74,23 @@ create_temp_metadata <- function(dir, sample_names = c("Sample1", "Sample2"), gr
 }
 
 create_temp_params <- function(dir, classifier = "minimap2",
-                               database_set = "ncbi_16s_18s", taxonomic_rank = "S") {
+                               database_set = "ncbi_16s_18s", taxonomic_rank = "S",
+                               kraken2_confidence = if (classifier == "kraken2") 0 else NULL,
+                               bracken_threshold = if (classifier == "kraken2") 10 else NULL,
+                               bracken_length = NULL) {
   path <- file.path(dir, "params.json")
   database_sets <- list()
   database_sets[[database_set]] <- list(
     reference = sprintf("s3://ont-open-data/workflow-databases/wf-metagenomics-dbs/%s/%s.fna",
                         database_set, if (database_set == "ncbi_16s_18s") "ncbi_targeted_loci_16s_18s" else "ncbi_16s_18s_28s_ITS"),
     database = sprintf("s3://ont-open-data/workflow-databases/wf-metagenomics-dbs/%s/%s_kraken2.tar.gz",
-                       database_set, if (database_set == "ncbi_16s_18s") "ncbi_targeted_loci" else "ncbi_16s_18s_28s_ITS"),
+                        database_set, if (database_set == "ncbi_16s_18s") "ncbi_targeted_loci" else "ncbi_16s_18s_28s_ITS"),
     ref2taxid = if (database_set == "ncbi_16s_18s")
       "s3://ont-open-data/workflow-databases/wf-metagenomics-dbs/ncbi_16s_18s/ref2taxid.targloci.tsv"
       else "s3://ont-open-data/workflow-databases/wf-metagenomics-dbs/ncbi_16s_18s_28s_ITS/ref2taxid.ncbi_16s_18s_28s_ITS.tsv",
     taxonomy = sprintf("s3://ont-open-data/workflow-databases/wf-metagenomics-dbs/%s/new_taxdump_2025-01-01.zip", database_set)
   )
-  jsonlite::write_json(list(
+  payload <- list(
     classifier = classifier, database_set = database_set,
     taxonomic_rank = taxonomic_rank, min_len = 1300, max_len = 1700,
     min_read_qual = 10, min_percent_identity = 90, min_ref_coverage = 90,
@@ -95,7 +98,11 @@ create_temp_params <- function(dir, classifier = "minimap2",
     ref2taxid = NULL, database = NULL, database_sets = database_sets,
     output_unclassified = TRUE, include_read_assignments = TRUE,
     wf = list(agent = "epi2melabs/test")
-  ), path, auto_unbox = TRUE, pretty = TRUE, null = "null")
+  )
+  if (!is.null(kraken2_confidence)) payload$kraken2_confidence <- kraken2_confidence
+  if (!is.null(bracken_threshold)) payload$bracken_threshold <- bracken_threshold
+  if (classifier == "kraken2") payload["bracken_length"] <- list(bracken_length)
+  jsonlite::write_json(payload, path, auto_unbox = TRUE, pretty = TRUE, null = "null")
   path
 }
 

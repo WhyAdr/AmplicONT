@@ -142,8 +142,23 @@ test_that("Krona opt-in requires the kreport module before output mutation", {
   expect_false(file.exists(output))
 })
 
-test_that("Kraken2 is rejected from params before assignment schema parsing", {
-  root <- tempfile("kraken_contract_")
+test_that("Unsupported classifier is rejected from params before assignment schema parsing", {
+  root <- tempfile("classifier_contract_")
+  dir.create(root)
+  bad_assignment <- file.path(root, "six_field.tsv")
+  writeLines("C\tread1\t123\t1500\tA:1\tBacteria", bad_assignment)
+  config <- write_process_config(
+    root, assignments = list(S1 = normalizePath(bad_assignment, winslash = "/")),
+    classifier = "blast"
+  )
+  result <- run_pipeline_process(c("--config", config, "--validate-only"), tempdir())
+  expect_gt(result$status, 0L)
+  expect_match(result$stderr, "supports minimap2 and kraken2 only")
+  expect_false(grepl("expected exactly 5", result$stderr))
+})
+
+test_that("Kraken2 requires report mappings before assignment schema parsing", {
+  root <- tempfile("kraken_reports_contract_")
   dir.create(root)
   bad_assignment <- file.path(root, "six_field.tsv")
   writeLines("C\tread1\t123\t1500\tA:1\tBacteria", bad_assignment)
@@ -153,7 +168,7 @@ test_that("Kraken2 is rejected from params before assignment schema parsing", {
   )
   result <- run_pipeline_process(c("--config", config, "--validate-only"), tempdir())
   expect_gt(result$status, 0L)
-  expect_match(result$stderr, "supports minimap2 only")
+  expect_match(result$stderr, "requires 'input.kraken2_reports' mapping")
   expect_false(grepl("expected exactly 5", result$stderr))
 })
 

@@ -28,6 +28,25 @@ TOOL_NAME = "ont_wf16s_postprocess"
 MAX_SAFE_INTEGER = 9007199254740991
 MAX_READ_LENGTH = 2147483647
 PLACEHOLDER_NAMES = {"unknown", "unclassified", "uncultured", "unidentified"}
+PLACEHOLDER_RANK_RE = re.compile(r"^unclassified (.+) (family|genus|order|class|phylum)$")
+
+
+def normalize_placeholder_rank(rank_str):
+    m = PLACEHOLDER_RANK_RE.match(rank_str)
+    if m:
+        return f"{m.group(1)}_Incertae_sedis"
+    return rank_str
+
+
+def is_placeholder_node_name(name):
+    lowered = name.strip().lower()
+    if lowered in PLACEHOLDER_NAMES:
+        return True
+    if lowered.endswith("_incertae_sedis") or lowered == "incertae_sedis":
+        return True
+    return False
+
+
 READ_LENGTH_RE = re.compile(r"^[0-9]+$|^[0-9]+\|[1-9][0-9]*$")
 EXPECTED_RANKS = ("superkingdom", "kingdom", "phylum", "class", "order", "family", "genus", "species")
 CELLULAR_DOMAINS = {"bacteria", "archaea", "eukaryota"}
@@ -372,9 +391,12 @@ def read_abundance_paths(path, tax_column, expected_sha256=None):
     return list(dict.fromkeys(paths))
 
 
-def read_assignment_taxids(paths, expected_hashes=None):
+def read_assignment_taxids(paths, expected_hashes=None, classifier="minimap2"):
     lineage_to_taxids = {}
     expected_hashes = expected_hashes or {}
+    is_kraken = classifier == "kraken2"
+    expected_field_count = 6 if is_kraken else 5
+
     for path in paths:
         verify_expected_file(path, expected_hashes.get(path), "assignment")
         seen_read_ids = set()
@@ -384,9 +406,13 @@ def read_assignment_taxids(paths, expected_hashes=None):
                 if not line.rstrip("\r\n"):
                     continue
                 fields = line.rstrip("\r\n").split("\t")
-                if len(fields) != 5:
-                    raise ValueError(f"{path}:{line_number}: expected exactly 5 assignment fields.")
-                status, read_id, length_field, lineage = fields[0], fields[1], fields[3], fields[4]
+                if len(fields) != expected_field_count:
+                    raise ValueError(f"{path}:{line_number}: expected exactly {expected_field_count} assignment fields.")
+                if is_kraken:
+                    status, read_id, taxid_text, length_field, hits_field, lineage = fields
+                else:
+                    status, read_id, taxid_text, length_field, lineage = fields[0], fields[1], fields[2], fields[3], fields[4]
+
                 if status not in {"C", "U"}:
                     raise ValueError(f"{path}:{line_number}: invalid status {status!r}.")
                 if not read_id or read_id != read_id.strip() or any(ord(ch) < 32 for ch in read_id):
@@ -394,22 +420,60 @@ def read_assignment_taxids(paths, expected_hashes=None):
                 if read_id in seen_read_ids:
                     raise ValueError(f"{path}:{line_number}: duplicate read ID {read_id!r}.")
                 seen_read_ids.add(read_id)
-                if not READ_LENGTH_RE.fullmatch(length_field):
-                    raise ValueError(f"{path}:{line_number}: malformed read length field.")
-                read_length = int(length_field.rsplit("|", 1)[-1])
-                if read_length <= 0 or read_length > MAX_READ_LENGTH:
-                    raise ValueError(f"{path}:{line_number}: read length must satisfy 0 < length <= {MAX_READ_LENGTH}.")
-                taxid_text = fields[2]
-                if any(field != field.strip() or any(ord(ch) < 32 for ch in field)
-                       for field in (fields[1], taxid_text, lineage)):
-                    raise ValueError(f"{path}:{line_number}: unsafe boundary whitespace or control character.")
-                taxid = parse_taxid(taxid_text, f"{path}:{line_number}")
-                if status == "U" and taxid != 0:
-                    raise ValueError(f"{path}:{line_number}: status U requires TaxID 0.")
-                if taxid > 0 and (not lineage or any(not part for part in lineage.split("|"))):
-                    raise ValueError(f"{path}:{line_number}: positive TaxID requires a complete lineage.")
-                if taxid > 0:
-                    lineage_to_taxids.setdefault(lineage, []).append(taxid)
+
+                if is_kraken:
+                    if not re.fullmatch(r"^[1-9][0-9]*$", length_field):
+                        raise ValueError(f"{path}:{line_number}: malformed read length field.")
+                    read_length = int(length_field)
+                    if read_length <= 0 or read_length > MAX_READ_LENGTH:
+                        raise ValueError(f"{path}:{line_number}: read length must satisfy 0 < length <= {MAX_READ_LENGTH}.")
+
+                    if not hits_field or hits_field != hits_field.strip() or any(ord(ch) < 32 for ch in hits_field):
+                        raise ValueError(f"{path}:{line_number}: unsafe boundary whitespace or control character.")
+                    if "|" in hits_field or "\t" in hits_field:
+                        raise ValueError(f"{path}:{line_number}: malformed hit list.")
+                    tokens = hits_field.split(" ")
+                    if not tokens or any(not t for t in tokens):
+                        raise ValueError(f"{path}:{line_number}: malformed hit list.")
+                    for token in tokens:
+                        if not re.fullmatch(r"(?:0|[1-9][0-9]*|A):[0-9]+", token):
+                            raise ValueError(f"{path}:{line_number}: malformed hit token {token!r}.")
+
+                    if any(field != field.strip() or any(ord(ch) < 32 for ch in field)
+                           for field in (read_id, taxid_text)):
+                        raise ValueError(f"{path}:{line_number}: unsafe boundary whitespace or control character.")
+                    if any(ord(ch) < 32 for ch in lineage):
+                        raise ValueError(f"{path}:{line_number}: unsafe boundary whitespace or control character.")
+
+                    taxid = parse_taxid(taxid_text, f"{path}:{line_number}")
+                    if status == "U" and taxid != 0:
+                        raise ValueError(f"{path}:{line_number}: status U requires TaxID 0.")
+                    if status == "C" and taxid == 0:
+                        raise ValueError(f"{path}:{line_number}: status C requires positive TaxID.")
+                    if taxid > 0:
+                        parts = lineage.split("|")
+                        if len(parts) != 7 or any(not part or part != part.strip() for part in parts):
+                            raise ValueError(f"{path}:{line_number}: positive TaxID requires a complete lineage.")
+                        lineage_to_taxids.setdefault(lineage, []).append(taxid)
+                        norm_lineage = "|".join(normalize_placeholder_rank(p) for p in parts)
+                        if norm_lineage != lineage:
+                            lineage_to_taxids.setdefault(norm_lineage, []).append(taxid)
+                else:
+                    if not READ_LENGTH_RE.fullmatch(length_field):
+                        raise ValueError(f"{path}:{line_number}: malformed read length field.")
+                    read_length = int(length_field.rsplit("|", 1)[-1])
+                    if read_length <= 0 or read_length > MAX_READ_LENGTH:
+                        raise ValueError(f"{path}:{line_number}: read length must satisfy 0 < length <= {MAX_READ_LENGTH}.")
+                    if any(field != field.strip() or any(ord(ch) < 32 for ch in field)
+                           for field in (fields[1], taxid_text, lineage)):
+                        raise ValueError(f"{path}:{line_number}: unsafe boundary whitespace or control character.")
+                    taxid = parse_taxid(taxid_text, f"{path}:{line_number}")
+                    if status == "U" and taxid != 0:
+                        raise ValueError(f"{path}:{line_number}: status U requires TaxID 0.")
+                    if taxid > 0 and (not lineage or any(not part for part in lineage.split("|"))):
+                        raise ValueError(f"{path}:{line_number}: positive TaxID requires a complete lineage.")
+                    if taxid > 0:
+                        lineage_to_taxids.setdefault(lineage, []).append(taxid)
         verify_expected_file(path, expected_hashes.get(path), "assignment")
 
     resolved = {}
@@ -714,10 +778,18 @@ def resolve_unresolved_online(unresolved, cache, resolution_sources, email, api_
                           if part.strip().lower() not in PLACEHOLDER_NAMES]
         query_key = (name, expected_rank, tuple(ancestor_names))
         if query_key not in name_results:
-            name_results[query_key] = query_exact_scientific_name(
-                name, email, api_key, expected_rank=expected_rank,
-                ancestor_names=ancestor_names, limiter=limiter, events=events
-            )
+            if is_placeholder_node_name(name):
+                name_results[query_key] = LookupOutcome(
+                    status="not_found",
+                    code="placeholder_rank",
+                    message="Inferred/placeholder rank excluded from remote NCBI query",
+                    expected_rank=expected_rank
+                )
+            else:
+                name_results[query_key] = query_exact_scientific_name(
+                    name, email, api_key, expected_rank=expected_rank,
+                    ancestor_names=ancestor_names, limiter=limiter, events=events
+                )
         outcome = name_results[query_key]
         outcome_record = {
             "path": item["path"], "name": name, "status": outcome.status,
@@ -829,6 +901,7 @@ def main():
     parser.add_argument("--abundance", required=True)
     parser.add_argument("--tax-column", default="tax")
     parser.add_argument("--assignments", action="append", default=[])
+    parser.add_argument("--classifier", choices=["minimap2", "kraken2"], default="minimap2")
     parser.add_argument("--expected-input", action="append", default=[],
                         help="Expected input fingerprint as PATH<TAB>SHA256; may be repeated")
     parser.add_argument("--cache", required=True, help="Read-only source cache in cache_only mode")
@@ -912,7 +985,9 @@ def main():
                 taxon_path: "source_cache" for taxon_path, taxid in cache.items() if taxid > 0
             }
             assignment_hashes = {path: expected_inputs[path] for path in args.assignments if path in expected_inputs}
-            assignment_map, conflicts = read_assignment_taxids(args.assignments, assignment_hashes)
+            assignment_map, conflicts = read_assignment_taxids(
+                args.assignments, assignment_hashes, classifier=args.classifier
+            )
             conflict_lineages = {item["lineage"] for item in conflicts}
 
             for path in abundance_paths:

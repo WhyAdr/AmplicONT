@@ -828,6 +828,67 @@ class TaxonomyResolverTests(unittest.TestCase):
         with taxonomy.acquire_cache_lock(str(self.cache), timeout=0.2):
             pass
 
+    def test_kraken2_assignment_reading_valid_and_invalid(self):
+        kraken_file = self.work / "kraken_assignments.tsv"
+        kraken_file.write_text(
+            "C\tr1\t4932\t500\t4932:50 A:10\tEukaryota|Ascomycota|Saccharomycetes|Saccharomycetales|Saccharomycetaceae|Saccharomyces|Saccharomyces cerevisiae\n"
+            "U\tr2\t0\t450\t0:100\t||||||\n",
+            encoding="utf-8",
+        )
+        tmap, conflicts = taxonomy.read_assignment_taxids([str(kraken_file)], classifier="kraken2")
+        self.assertEqual(tmap["Eukaryota|Ascomycota|Saccharomycetes|Saccharomycetales|Saccharomycetaceae|Saccharomyces|Saccharomyces cerevisiae"], 4932)
+        self.assertEqual(conflicts, [])
+
+        with self.assertRaisesRegex(ValueError, "expected exactly 5 assignment fields"):
+            taxonomy.read_assignment_taxids([str(kraken_file)], classifier="minimap2")
+
+        with self.assertRaisesRegex(ValueError, "expected exactly 6 assignment fields"):
+            taxonomy.read_assignment_taxids([str(self.assignment)], classifier="kraken2")
+
+    def test_kraken2_assignment_grammar_and_rejections(self):
+        bad_file = self.work / "bad_kraken.tsv"
+
+        bad_file.write_text("U\tr1\t123\t500\t123:50\t||||||\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "status U requires TaxID 0"):
+            taxonomy.read_assignment_taxids([str(bad_file)], classifier="kraken2")
+
+        bad_file.write_text("C\tr1\t0\t500\t0:50\tA|B|C|D|E|F|G\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "status C requires positive TaxID"):
+            taxonomy.read_assignment_taxids([str(bad_file)], classifier="kraken2")
+
+        bad_file.write_text("C\tr1\t4932\t500\t4932:50|123:10\tA|B|C|D|E|F|G\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "malformed hit list"):
+            taxonomy.read_assignment_taxids([str(bad_file)], classifier="kraken2")
+
+        bad_file.write_text("C\tr1\t4932\t500\tinvalid_token\tA|B|C|D|E|F|G\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "malformed hit token"):
+            taxonomy.read_assignment_taxids([str(bad_file)], classifier="kraken2")
+
+    def test_kraken2_placeholder_normalization(self):
+        kfile = self.work / "placeholder_kraken.tsv"
+        kfile.write_text(
+            "C\tr1\t1183333\t600\t1183333:60\tFungi|Ascomycota|Saccharomycetes|Saccharomycetales|unclassified Dipodascales family|Candida|Candida tunisiensis\n",
+            encoding="utf-8",
+        )
+        tmap, conflicts = taxonomy.read_assignment_taxids([str(kfile)], classifier="kraken2")
+        norm_key = "Fungi|Ascomycota|Saccharomycetes|Saccharomycetales|Dipodascales_Incertae_sedis|Candida|Candida tunisiensis"
+        self.assertEqual(tmap.get(norm_key), 1183333)
+
+    def test_placeholder_nodes_skipped_in_remote_lookup(self):
+        item = {
+            "path": "Fungi;Ascomycota;Saccharomycetes;Saccharomycetales;Dipodascales_Incertae_sedis",
+            "name": "Dipodascales_Incertae_sedis",
+            "depth": 5,
+        }
+        with mock.patch.object(taxonomy, "query_exact_scientific_name") as mock_query:
+            cache = {}
+            res_sources = {}
+            events = taxonomy.EventWriter()
+            res = taxonomy.resolve_unresolved_online([item], cache, res_sources, "test@example.com", None, events)
+            self.assertEqual(mock_query.call_count, 0)
+            self.assertEqual(len(res["lookup_outcomes"]), 1)
+            self.assertEqual(res["lookup_outcomes"][0]["code"], "placeholder_rank")
+
 
 if __name__ == "__main__":
     unittest.main()

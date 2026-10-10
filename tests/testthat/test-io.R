@@ -5,13 +5,15 @@
 source(file.path("..", "..", "analysis", "utils", "config.R"))
 source(file.path("..", "..", "analysis", "utils", "io.R"))
 
-test_that("producer contract accepts supported minimap2 and rejects unsafe alternatives", {
+test_that("producer contract accepts supported minimap2 and kraken2, and rejects unsafe alternatives", {
   root <- tempfile("params_contract_")
   dir.create(root)
   supported <- read_upstream_params(create_temp_params(root))
   expect_equal(supported$classifier, "minimap2")
-  expect_error(read_upstream_params(create_temp_params(root, classifier = "kraken2")),
-               "supports minimap2 only")
+  kraken_supported <- read_upstream_params(create_temp_params(root, classifier = "kraken2"))
+  expect_equal(kraken_supported$classifier, "kraken2")
+  expect_error(read_upstream_params(create_temp_params(root, classifier = "blast")),
+               "supports minimap2 and kraken2 only")
   expect_error(read_upstream_params(create_temp_params(root, database_set = "SILVA_138_1")),
                "bundled NCBI database sets only")
   expect_error(read_upstream_params(create_temp_params(root, taxonomic_rank = "G")),

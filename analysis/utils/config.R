@@ -140,15 +140,20 @@ validate_config <- function(cfg) {
        any(!nzchar(cfg$input$include_samples)) || anyDuplicated(cfg$input$include_samples))) {
     stop("'input.include_samples' must contain unique, non-empty sample IDs.", call. = FALSE)
   }
-  if (!is.null(cfg$input$assignments)) {
-    if (!is.list(cfg$input$assignments) || is.null(names(cfg$input$assignments)) ||
-        any(!nzchar(names(cfg$input$assignments))) || anyDuplicated(names(cfg$input$assignments))) {
-      stop("'input.assignments' must be a named mapping of unique SampleID -> path.", call. = FALSE)
+  for (mapping_key in c("assignments", "kraken2_reports", "bracken_reports", "params_by_sample")) {
+    mapping_val <- cfg$input[[mapping_key]]
+    if (!is.null(mapping_val)) {
+      if (!is.list(mapping_val) || is.null(names(mapping_val)) ||
+          any(!nzchar(names(mapping_val))) || anyDuplicated(names(mapping_val))) {
+        stop(sprintf("'input.%s' must be a named mapping of unique SampleID -> path.", mapping_key), call. = FALSE)
+      }
+      valid_paths <- vapply(mapping_val, function(path) {
+        is.character(path) && length(path) == 1L && !is.na(path) && nzchar(trimws(path))
+      }, logical(1))
+      if (!all(valid_paths)) {
+        stop(sprintf("Every 'input.%s' value must be one non-empty path.", mapping_key), call. = FALSE)
+      }
     }
-    valid_paths <- vapply(cfg$input$assignments, function(path) {
-      is.character(path) && length(path) == 1L && !is.na(path) && nzchar(trimws(path))
-    }, logical(1))
-    if (!all(valid_paths)) stop("Every 'input.assignments' value must be one non-empty path.", call. = FALSE)
   }
 
   assert_scalar_number(cfg$qc$display_min_length, "qc.display_min_length", lower = 1, integer = TRUE)
@@ -315,6 +320,9 @@ get_default_config <- function() {
       aggregate_columns = c("total"),
       include_samples = NULL,
       assignments = NULL,
+      kraken2_reports = NULL,
+      bracken_reports = NULL,
+      params_by_sample = NULL,
       phylogenetic_tree = NULL,
       phylogenetic_tip_map = NULL
     ),
@@ -535,9 +543,11 @@ load_config <- function(config_path = "config.yml", cli_opts = list()) {
   cfg$input$phylogenetic_tree <- resolve_path(cfg$input$phylogenetic_tree, config_dir)
   cfg$input$phylogenetic_tip_map <- resolve_path(cfg$input$phylogenetic_tip_map, config_dir)
 
-  if (!is.null(cfg$input$assignments) && is.list(cfg$input$assignments)) {
-    for (s in names(cfg$input$assignments)) {
-      cfg$input$assignments[[s]] <- resolve_path(cfg$input$assignments[[s]], config_dir)
+  for (mapping_key in c("assignments", "kraken2_reports", "bracken_reports", "params_by_sample")) {
+    if (!is.null(cfg$input[[mapping_key]]) && is.list(cfg$input[[mapping_key]])) {
+      for (s in names(cfg$input[[mapping_key]])) {
+        cfg$input[[mapping_key]][[s]] <- resolve_path(cfg$input[[mapping_key]][[s]], config_dir)
+      }
     }
   }
 

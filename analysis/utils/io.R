@@ -11,6 +11,18 @@ suppressMessages({
 
 RANKS_8 <- c("superkingdom", "kingdom", "phylum", "class", "order", "family", "genus", "species")
 
+source_classifier_contract <- function() {
+  candidates <- c(
+    file.path(getOption("wf16s.pipeline_root", ""), "analysis", "utils", "classifier_contract.R"),
+    file.path(getwd(), "analysis", "utils", "classifier_contract.R"),
+    file.path(getwd(), "..", "analysis", "utils", "classifier_contract.R"),
+    file.path(getwd(), "..", "..", "analysis", "utils", "classifier_contract.R")
+  )
+  path <- candidates[file.exists(candidates)][1]
+  if (!is.na(path)) source(path)
+}
+source_classifier_contract()
+
 compute_file_hash <- function(path) {
   if (is.null(path) || !file.exists(path)) return(NA_character_)
   digest::digest(file = path, algo = "sha256")
@@ -46,8 +58,7 @@ read_upstream_params <- function(path) {
                              call. = FALSE)
   )
   required <- c("classifier", "database_set", "taxonomic_rank", "min_len", "max_len",
-                "min_read_qual", "min_percent_identity", "min_ref_coverage",
-                "abundance_threshold")
+                "min_read_qual", "abundance_threshold")
   missing <- required[vapply(required, function(x) is.null(params[[x]]), logical(1))]
   if (length(missing)) {
     stop(sprintf("params.json is missing required contract field(s): %s",
@@ -63,9 +74,9 @@ read_upstream_params <- function(path) {
   classifier <- scalar_string("classifier")
   database_set <- scalar_string("database_set")
   taxonomic_rank <- scalar_string("taxonomic_rank")
-  if (!identical(classifier, "minimap2")) {
+  if (!classifier %in% c("minimap2", "kraken2")) {
     stop(sprintf(
-      "Unsupported wf-16s classifier '%s'. This pipeline supports minimap2 only; Kraken2/Bracken requires a classifier-specific denominator model.",
+      "Unsupported wf-16s classifier '%s'. This pipeline supports minimap2 and kraken2 only.",
       classifier
     ), call. = FALSE)
   }
@@ -88,14 +99,52 @@ read_upstream_params <- function(path) {
     stop(sprintf("Custom wf-16s reference/taxonomy overrides are unsupported: %s",
                  paste(active_overrides, collapse = ", ")), call. = FALSE)
   }
-  numeric_fields <- c("min_len", "max_len", "min_read_qual", "min_percent_identity",
-                      "min_ref_coverage", "abundance_threshold")
+
+  numeric_fields <- c("min_len", "max_len", "min_read_qual", "abundance_threshold")
+  if (identical(classifier, "minimap2")) {
+    numeric_fields <- c(numeric_fields, "min_percent_identity", "min_ref_coverage")
+  }
   for (field in numeric_fields) {
     value <- params[[field]]
-    if (!is.numeric(value) || length(value) != 1L || is.na(value) || !is.finite(value)) {
+    if (is.logical(value) || !is.numeric(value) || length(value) != 1L || is.na(value) || !is.finite(value)) {
       stop(sprintf("params.json field '%s' must be one finite number.", field), call. = FALSE)
     }
   }
+
+  if (identical(classifier, "kraken2")) {
+    kc <- params$kraken2_confidence
+    if (is.null(kc) || is.logical(kc) || !is.numeric(kc) || length(kc) != 1L || is.na(kc) ||
+        !is.finite(kc) || kc < 0 || kc > 1) {
+      stop("params.json field 'kraken2_confidence' must be one finite number between 0 and 1.", call. = FALSE)
+    }
+
+    bt <- params$bracken_threshold
+    if (is.null(bt) || is.logical(bt) || !is.numeric(bt) || length(bt) != 1L || is.na(bt) ||
+        !is.finite(bt) || bt < 0 || bt != floor(bt) || bt > 9007199254740991) {
+      stop("params.json field 'bracken_threshold' must be a non-negative whole number no greater than 9007199254740991.", call. = FALSE)
+    }
+
+    if (!"bracken_length" %in% names(params)) {
+      stop("params.json missing required key 'bracken_length'.", call. = FALSE)
+    }
+    bl <- params$bracken_length
+    if (!is.null(bl)) {
+      if (is.logical(bl) || !is.numeric(bl) || length(bl) != 1L || is.na(bl) ||
+          !is.finite(bl) || bl <= 0 || bl != floor(bl) || bl > 9007199254740991) {
+        stop("params.json field 'bracken_length' must be null or a positive whole number no greater than 9007199254740991.", call. = FALSE)
+      }
+    }
+
+    for (field in c("min_percent_identity", "min_ref_coverage")) {
+      value <- params[[field]]
+      if (!is.null(value)) {
+        if (is.logical(value) || !is.numeric(value) || length(value) != 1L || is.na(value) || !is.finite(value)) {
+          stop(sprintf("params.json field '%s' must be one finite number.", field), call. = FALSE)
+        }
+      }
+    }
+  }
+
   contract <- load_upstream_database_contracts()
   selected <- params$database_sets[[database_set]]
   if (is.null(selected) || !is.list(selected)) {
@@ -124,17 +173,23 @@ read_upstream_params <- function(path) {
     }
   }
   if (params$min_len <= 0 || params$max_len <= params$min_len || params$min_read_qual < 0 ||
-      params$min_percent_identity < 0 || params$min_percent_identity > 100 ||
-      params$min_ref_coverage < 0 || params$min_ref_coverage > 100 ||
       params$abundance_threshold < 0) {
-    stop("params.json contains an invalid length, quality, identity, coverage, or abundance threshold.",
+    stop("params.json contains an invalid length, quality, or abundance threshold.",
          call. = FALSE)
+  }
+  if (identical(classifier, "minimap2")) {
+    if (params$min_percent_identity < 0 || params$min_percent_identity > 100 ||
+        params$min_ref_coverage < 0 || params$min_ref_coverage > 100) {
+      stop("params.json contains an invalid identity or coverage threshold.",
+           call. = FALSE)
+    }
   }
   params
 }
 
 extract_upstream_contract <- function(params) {
   database_meta <- params$database_sets[[params$database_set]]
+  is_kraken <- identical(params$classifier, "kraken2")
   list(
     workflow_name = "epi2me-labs/wf-16s",
     workflow_version = NULL,
@@ -151,9 +206,15 @@ extract_upstream_contract <- function(params) {
     min_len = params$min_len,
     max_len = params$max_len,
     min_read_qual = params$min_read_qual,
-    min_percent_identity = params$min_percent_identity,
-    min_ref_coverage = params$min_ref_coverage,
+    min_percent_identity = params$min_percent_identity %||% NULL,
+    min_ref_coverage = params$min_ref_coverage %||% NULL,
     abundance_threshold = params$abundance_threshold,
+    kraken2_confidence = params$kraken2_confidence %||% NULL,
+    bracken_threshold = params$bracken_threshold %||% NULL,
+    bracken_length = params$bracken_length %||% NULL,
+    abundance_source = if (is_kraken) "bracken_species_estimates" else "minimap2_alignments",
+    assignment_format = if (is_kraken) "kraken2_lineages_6col" else "minimap2_lineages_5col",
+    identity_coverage_active = !is_kraken,
     output_unclassified = params$output_unclassified %||% NULL,
     include_read_assignments = params$include_read_assignments %||% NULL
   )
@@ -533,14 +594,16 @@ is_canonical_taxid <- function(x) {
     (nchar(x) < 16L | x <= "9007199254740991")
 }
 
-validate_assignment_chunk <- function(lines, sample_id, line_numbers, seen_read_ids) {
+validate_assignment_chunk <- function(lines, sample_id, line_numbers, seen_read_ids, classifier = "minimap2") {
+  is_kraken <- identical(classifier, "kraken2")
+  expected_fields <- if (is_kraken) 6L else 5L
   fields <- strsplit(paste0(lines, "\t"), "\t", fixed = TRUE)
   field_counts <- lengths(fields)
-  if (any(field_counts != 5L)) {
-    bad_index <- which(field_counts != 5L)[1]
+  if (any(field_counts != expected_fields)) {
+    bad_index <- which(field_counts != expected_fields)[1]
     stop(sprintf(
-      "Assignments file for sample '%s' has %d fields at line %d; expected exactly 5.",
-      sample_id, field_counts[bad_index], line_numbers[bad_index]
+      "Assignments file for sample '%s' has %d fields at line %d; expected exactly %d.",
+      sample_id, field_counts[bad_index], line_numbers[bad_index], expected_fields
     ), call. = FALSE)
   }
 
@@ -548,8 +611,6 @@ validate_assignment_chunk <- function(lines, sample_id, line_numbers, seen_read_
   status <- fields[, 1]
   read_id <- fields[, 2]
   taxid_text <- fields[, 3]
-  length_field <- fields[, 4]
-  lineage <- fields[, 5]
 
   if (any(!is_tsv_safe_identifier(read_id))) {
     bad_index <- which(!is_tsv_safe_identifier(read_id))[1]
@@ -578,6 +639,7 @@ validate_assignment_chunk <- function(lines, sample_id, line_numbers, seen_read_
     stop(sprintf("Assignments file for sample '%s' has non-integer TaxID '%s' at line %d",
                  sample_id, taxid_text[bad_index], line_numbers[bad_index]), call. = FALSE)
   }
+
   inconsistent <- status == "U" & taxid_text != "0"
   if (any(inconsistent)) {
     bad_index <- which(inconsistent)[1]
@@ -585,29 +647,97 @@ validate_assignment_chunk <- function(lines, sample_id, line_numbers, seen_read_
                  sample_id, line_numbers[bad_index]), call. = FALSE)
   }
 
-  positive <- taxid_text != "0"
-  invalid_lineage <- positive & (!is_tsv_safe_identifier(lineage) |
-    vapply(strsplit(lineage, "\\|", fixed = FALSE), function(parts) {
-      any(!is_tsv_safe_identifier(parts))
-    }, logical(1)))
-  if (any(invalid_lineage)) {
-    bad_index <- which(invalid_lineage)[1]
-    stop(sprintf("Assignments file for sample '%s' has a blank or unsafe lineage for positive TaxID at line %d",
-                 sample_id, line_numbers[bad_index]), call. = FALSE)
-  }
+  if (is_kraken) {
+    c_with_zero <- status == "C" & taxid_text == "0"
+    if (any(c_with_zero)) {
+      bad_index <- which(c_with_zero)[1]
+      stop(sprintf("Assignments file for sample '%s' has status C with TaxID 0 at line %d",
+                   sample_id, line_numbers[bad_index]), call. = FALSE)
+    }
 
-  read_length <- vapply(length_field, parse_assignment_length, integer(1), USE.NAMES = FALSE)
-  invalid_length <- is.na(read_length) | !is.finite(read_length) | read_length <= 0
-  if (any(invalid_length)) {
-    bad_index <- which(invalid_length)[1]
-    stop(sprintf("Assignments file for sample '%s' has malformed length field '%s' at line %d",
-                 sample_id, length_field[bad_index], line_numbers[bad_index]), call. = FALSE)
+    length_field <- fields[, 4]
+    valid_len <- grepl("^[1-9][0-9]*$", length_field) &
+      (nchar(length_field) < 10L | (nchar(length_field) == 10L & length_field <= "2147483647"))
+    if (any(!valid_len)) {
+      bad_index <- which(!valid_len)[1]
+      stop(sprintf("Assignments file for sample '%s' has malformed length field '%s' at line %d",
+                   sample_id, length_field[bad_index], line_numbers[bad_index]), call. = FALSE)
+    }
+
+    hits_field <- fields[, 5]
+    bad_hits_raw <- !nzchar(hits_field) | hits_field != trimws(hits_field) | grepl("[[:cntrl:]]", hits_field, perl = TRUE)
+    if (any(bad_hits_raw)) {
+      bad_index <- which(bad_hits_raw)[1]
+      stop(sprintf("Assignments file for sample '%s' has malformed hit list at line %d",
+                   sample_id, line_numbers[bad_index]), call. = FALSE)
+    }
+    valid_hits <- !grepl("[|\\t]", hits_field) &
+      vapply(strsplit(hits_field, " ", fixed = TRUE), function(tokens) {
+        if (length(tokens) == 0L || any(!nzchar(tokens))) return(FALSE)
+        all(grepl("^(?:0|[1-9][0-9]*|A):[0-9]+$", tokens, perl = TRUE))
+      }, logical(1))
+    if (any(!valid_hits)) {
+      bad_index <- which(!valid_hits)[1]
+      stop(sprintf("Assignments file for sample '%s' has malformed hit list at line %d",
+                   sample_id, line_numbers[bad_index]), call. = FALSE)
+    }
+
+    lineage <- fields[, 6]
+    c_mask <- status == "C"
+    if (any(c_mask)) {
+      c_lineages <- lineage[c_mask]
+      c_lines <- line_numbers[c_mask]
+      invalid_c_lineage <- vapply(c_lineages, function(lin) {
+        if (!is_tsv_safe_identifier(lin)) return(TRUE)
+        parts <- strsplit(lin, "|", fixed = TRUE)[[1]]
+        if (length(parts) != 7L || any(!is_tsv_safe_identifier(parts))) return(TRUE)
+        FALSE
+      }, logical(1))
+      if (any(invalid_c_lineage)) {
+        bad_c_idx <- which(invalid_c_lineage)[1]
+        stop(sprintf("Assignments file for sample '%s' has invalid lineage for status C at line %d",
+                     sample_id, c_lines[bad_c_idx]), call. = FALSE)
+      }
+    }
+    u_mask <- status == "U"
+    if (any(u_mask)) {
+      u_lineages <- lineage[u_mask]
+      u_lines <- line_numbers[u_mask]
+      invalid_u_lineage <- grepl("[[:cntrl:]]", u_lineages, perl = TRUE)
+      if (any(invalid_u_lineage)) {
+        bad_u_idx <- which(invalid_u_lineage)[1]
+        stop(sprintf("Assignments file for sample '%s' has unsafe lineage at line %d",
+                     sample_id, u_lines[bad_u_idx]), call. = FALSE)
+      }
+    }
+  } else {
+    length_field <- fields[, 4]
+    lineage <- fields[, 5]
+
+    positive <- taxid_text != "0"
+    invalid_lineage <- positive & (!is_tsv_safe_identifier(lineage) |
+      vapply(strsplit(lineage, "\\|", fixed = FALSE), function(parts) {
+        any(!is_tsv_safe_identifier(parts))
+      }, logical(1)))
+    if (any(invalid_lineage)) {
+      bad_index <- which(invalid_lineage)[1]
+      stop(sprintf("Assignments file for sample '%s' has a blank or unsafe lineage for positive TaxID at line %d",
+                   sample_id, line_numbers[bad_index]), call. = FALSE)
+    }
+
+    read_length <- vapply(length_field, parse_assignment_length, integer(1), USE.NAMES = FALSE)
+    invalid_length <- is.na(read_length) | !is.finite(read_length) | read_length <= 0
+    if (any(invalid_length)) {
+      bad_index <- which(invalid_length)[1]
+      stop(sprintf("Assignments file for sample '%s' has malformed length field '%s' at line %d",
+                   sample_id, length_field[bad_index], line_numbers[bad_index]), call. = FALSE)
+    }
   }
 
   invisible(NULL)
 }
 
-scan_assignments_file <- function(path, sample_id, chunk_size) {
+scan_assignments_file <- function(path, sample_id = "sample", chunk_size = 100000L, classifier = "minimap2") {
   connection <- open_assignments_connection(path)
   on.exit(close(connection), add = TRUE)
   seen_read_ids <- new.env(hash = TRUE, parent = emptyenv())
@@ -621,7 +751,8 @@ scan_assignments_file <- function(path, sample_id, chunk_size) {
     physical_line <- physical_line + length(lines)
     nonempty <- nzchar(lines)
     if (!any(nonempty)) next
-    validate_assignment_chunk(lines[nonempty], sample_id, line_numbers[nonempty], seen_read_ids)
+    validate_assignment_chunk(lines[nonempty], sample_id, line_numbers[nonempty], seen_read_ids,
+                              classifier = classifier)
     row_count <- row_count + sum(nonempty)
   }
 
@@ -632,7 +763,9 @@ scan_assignments_file <- function(path, sample_id, chunk_size) {
 }
 
 read_assignments_file <- function(path, sample_id, expected_total = NULL, expected_classified = NULL,
-                                  expected_unclassified = NULL, chunk_size = 100000L) {
+                                  expected_unclassified = NULL, chunk_size = 100000L,
+                                  classifier = "minimap2") {
+  is_kraken <- identical(classifier, "kraken2")
   if (!file.exists(path)) {
     stop(sprintf("Assignments file for sample '%s' not found: '%s'", sample_id, path), call. = FALSE)
   }
@@ -647,7 +780,7 @@ read_assignments_file <- function(path, sample_id, expected_total = NULL, expect
     mtime = as.numeric(file.info(path)$mtime),
     sha256 = compute_file_hash(path)
   )
-  row_count <- scan_assignments_file(path, sample_id, chunk_size)
+  row_count <- scan_assignments_file(path, sample_id, chunk_size, classifier = classifier)
   fingerprint_after_scan <- list(
     size = file.info(path)$size,
     mtime = as.numeric(file.info(path)$mtime),
@@ -683,9 +816,14 @@ read_assignments_file <- function(path, sample_id, expected_total = NULL, expect
     raw_reads$read_id[indices] <- fields[, 2]
     raw_reads$taxid[indices] <- fields[, 3]
     raw_reads$len_field[indices] <- fields[, 4]
-    raw_reads$lineage[indices] <- fields[, 5]
-    raw_reads$read_length[indices] <- vapply(fields[, 4], parse_assignment_length,
-                                              integer(1), USE.NAMES = FALSE)
+    if (is_kraken) {
+      raw_reads$lineage[indices] <- fields[, 6]
+      raw_reads$read_length[indices] <- as.integer(fields[, 4])
+    } else {
+      raw_reads$lineage[indices] <- fields[, 5]
+      raw_reads$read_length[indices] <- vapply(fields[, 4], parse_assignment_length,
+                                                integer(1), USE.NAMES = FALSE)
+    }
     row_index <- row_index + nrow(fields)
   }
   fingerprint_after_read <- list(
@@ -706,20 +844,26 @@ read_assignments_file <- function(path, sample_id, expected_total = NULL, expect
   # Reconcile against abundance expectations
   if (!is.null(expected_total) && n_total != expected_total) {
     stop(sprintf(
-      "Reconciliation error for sample '%s': assignment rows (%.0f) != abundance total reads (%.0f)",
-      sample_id, as.numeric(n_total), as.numeric(expected_total)
+      "Reconciliation error for sample '%s': assignment rows (%.0f) != %s (%.0f)",
+      sample_id, as.numeric(n_total),
+      if (is_kraken) "Kraken total reads" else "abundance total reads",
+      as.numeric(expected_total)
     ), call. = FALSE)
   }
   if (!is.null(expected_classified) && n_eff_class != expected_classified) {
     stop(sprintf(
-      "Reconciliation error for sample '%s': effective classified reads (%.0f) != abundance classified reads (%.0f)",
-      sample_id, as.numeric(n_eff_class), as.numeric(expected_classified)
+      "Reconciliation error for sample '%s': effective classified reads (%.0f) != %s (%.0f)",
+      sample_id, as.numeric(n_eff_class),
+      if (is_kraken) "Kraken classified reads" else "abundance classified reads",
+      as.numeric(expected_classified)
     ), call. = FALSE)
   }
   if (!is.null(expected_unclassified) && n_eff_unclass != expected_unclassified) {
     stop(sprintf(
-      "Reconciliation error for sample '%s': effective unclassified reads (%.0f) != abundance unclassified reads (%.0f)",
-      sample_id, as.numeric(n_eff_unclass), as.numeric(expected_unclassified)
+      "Reconciliation error for sample '%s': effective unclassified reads (%.0f) != %s (%.0f)",
+      sample_id, as.numeric(n_eff_unclass),
+      if (is_kraken) "Kraken unclassified reads" else "abundance unclassified reads",
+      as.numeric(expected_unclassified)
     ), call. = FALSE)
   }
 
@@ -877,13 +1021,61 @@ build_context <- function(cfg) {
     stop("Cohort mode requires a metadata table mapping SampleID to Group.", call. = FALSE)
   }
 
-  # 5. Assignments mapping
+  # 5. Assignments mapping & report mapping validation
+  is_kraken <- identical(params$classifier, "kraken2")
+  if (is_kraken) {
+    if (is.null(cfg$input$kraken2_reports) || !is.list(cfg$input$kraken2_reports)) {
+      stop("Kraken2 upstream contract requires 'input.kraken2_reports' mapping for all samples.", call. = FALSE)
+    }
+    if (is.null(cfg$input$bracken_reports) || !is.list(cfg$input$bracken_reports)) {
+      stop("Kraken2 upstream contract requires 'input.bracken_reports' mapping for all samples.", call. = FALSE)
+    }
+    missing_k <- setdiff(selected_samples, names(cfg$input$kraken2_reports))
+    if (length(missing_k) > 0L) {
+      stop(sprintf("Missing Kraken2 report for sample(s): %s", paste(missing_k, collapse = ", ")), call. = FALSE)
+    }
+    extra_k <- setdiff(names(cfg$input$kraken2_reports), selected_samples)
+    if (length(extra_k) > 0L) {
+      stop(sprintf("Kraken2 reports configured for unselected/unknown sample(s): %s", paste(extra_k, collapse = ", ")), call. = FALSE)
+    }
+    missing_b <- setdiff(selected_samples, names(cfg$input$bracken_reports))
+    if (length(missing_b) > 0L) {
+      stop(sprintf("Missing Bracken report for sample(s): %s", paste(missing_b, collapse = ", ")), call. = FALSE)
+    }
+    extra_b <- setdiff(names(cfg$input$bracken_reports), selected_samples)
+    if (length(extra_b) > 0L) {
+      stop(sprintf("Bracken reports configured for unselected/unknown sample(s): %s", paste(extra_b, collapse = ", ")), call. = FALSE)
+    }
+  } else {
+    if (!is.null(cfg$input$kraken2_reports) || !is.null(cfg$input$bracken_reports)) {
+      stop("Kraken2/Bracken report mappings are not permitted for a minimap2 upstream contract.", call. = FALSE)
+    }
+  }
+
+  if (!is.null(cfg$input$params_by_sample)) {
+    if (!is.list(cfg$input$params_by_sample)) {
+      stop("Config 'input.params_by_sample' must be a mapping of SampleID -> path.", call. = FALSE)
+    }
+    missing_p <- setdiff(selected_samples, names(cfg$input$params_by_sample))
+    if (length(missing_p) > 0L) {
+      stop(sprintf("Missing params_by_sample for sample(s): %s", paste(missing_p, collapse = ", ")), call. = FALSE)
+    }
+    extra_p <- setdiff(names(cfg$input$params_by_sample), selected_samples)
+    if (length(extra_p) > 0L) {
+      stop(sprintf("params_by_sample configured for unselected/unknown sample(s): %s", paste(extra_p, collapse = ", ")), call. = FALSE)
+    }
+    for (s in selected_samples) {
+      s_params <- read_upstream_params(cfg$input$params_by_sample[[s]])
+      compare_upstream_params(params, s_params, s)
+    }
+  }
+
   assignments_map <- cfg$input$assignments
   if (!is.null(assignments_map) && !is.list(assignments_map)) {
     stop("Config 'input.assignments' must be a mapping of SampleID -> path or null.", call. = FALSE)
   }
   assignment_data <- list()
-  retain_assignment_rows <- !is.null(cfg$cli) && "qc" %in% cfg$cli$modules
+  retain_assignment_rows <- is_kraken || is.null(cfg$cli) || (!is.null(cfg$cli) && "qc" %in% cfg$cli$modules)
   if (!is.null(assignments_map)) {
     extra_assignment_ids <- setdiff(names(assignments_map), selected_samples)
     if (length(extra_assignment_ids) > 0L) {
@@ -894,12 +1086,36 @@ build_context <- function(cfg) {
       stat_row <- sample_stats[sample_stats$SampleID == s, , drop = FALSE]
       parsed_assignments <- read_assignments_file(
         assignments_map[[s]], s,
-        expected_total = stat_row$TotalReads[1],
-        expected_classified = stat_row$ClassifiedReads[1],
-        expected_unclassified = stat_row$UnclassifiedReads[1]
+        expected_total = if (is_kraken) NULL else stat_row$TotalReads[1],
+        expected_classified = if (is_kraken) NULL else stat_row$ClassifiedReads[1],
+        expected_unclassified = stat_row$UnclassifiedReads[1],
+        classifier = params$classifier
       )
       if (retain_assignment_rows) assignment_data[[s]] <- parsed_assignments
       rm(parsed_assignments)
+    }
+  }
+
+  kraken_reports_data <- list()
+  bracken_reports_data <- list()
+  sample_accounting <- list()
+  if (is_kraken) {
+    for (s in selected_samples) {
+      k_rep <- parse_kraken_report(cfg$input$kraken2_reports[[s]], sample_id = s)
+      b_rep <- parse_bracken_abundance(cfg$input$bracken_reports[[s]], sample_id = s)
+      kraken_reports_data[[s]] <- k_rep
+      bracken_reports_data[[s]] <- b_rep
+      match_bracken_to_abundance(b_rep, count_matrix, taxonomy_df,
+                                 assignments_df = assignment_data[[s]],
+                                 sample_id = s)
+      stat_row <- sample_stats[sample_stats$SampleID == s, , drop = FALSE]
+      sample_accounting[[s]] <- compute_kraken_sample_accounting(
+        k_rep, b_rep,
+        abundance_unclassified = stat_row$UnclassifiedReads[1],
+        abundance_species_sum = stat_row$ClassifiedReads[1],
+        assignment_data = assignment_data[[s]],
+        sample_id = s
+      )
     }
   }
 
@@ -917,8 +1133,12 @@ build_context <- function(cfg) {
     }
   }
 
-  # 6. Optional per-sample bamstats discovery
-  bamstats <- discover_bamstats(cfg$input$wf16s_output_root, selected_samples)
+  # 6. Optional per-sample bamstats discovery (minimap2 only)
+  bamstats <- if (is_kraken) {
+    list()
+  } else {
+    discover_bamstats(cfg$input$wf16s_output_root, selected_samples)
+  }
 
   # 7. File hashes
   file_hashes <- list(
@@ -932,6 +1152,17 @@ build_context <- function(cfg) {
   if (!is.null(assignments_map)) {
     for (s in names(assignments_map)) {
       file_hashes[[paste0("assignment_", s)]] <- compute_file_hash(assignments_map[[s]])
+    }
+  }
+  if (is_kraken) {
+    for (s in selected_samples) {
+      file_hashes[[paste0("kraken2_report_", s)]] <- compute_file_hash(cfg$input$kraken2_reports[[s]])
+      file_hashes[[paste0("bracken_report_", s)]] <- compute_file_hash(cfg$input$bracken_reports[[s]])
+    }
+  }
+  if (!is.null(cfg$input$params_by_sample)) {
+    for (s in selected_samples) {
+      file_hashes[[paste0("params_", s)]] <- compute_file_hash(cfg$input$params_by_sample[[s]])
     }
   }
   for (s in names(bamstats)[!is.na(bamstats)]) {
@@ -952,6 +1183,10 @@ build_context <- function(cfg) {
     bamstats = bamstats,
     params = params,
     upstream_contract = upstream_contract,
+    kraken2_reports = if (is_kraken) kraken_reports_data else NULL,
+    bracken_reports = if (is_kraken) bracken_reports_data else NULL,
+    sample_accounting = if (is_kraken) sample_accounting else NULL,
+    count_basis = if (is_kraken) "bracken_species_estimates" else "minimap2_alignments",
     file_hashes = file_hashes,
     warnings = character(0)
   )

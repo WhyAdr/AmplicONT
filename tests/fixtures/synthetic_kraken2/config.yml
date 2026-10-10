@@ -1,0 +1,29 @@
+schema_version: 1
+project_name: "synthetic_kraken2_test"
+mode: "single"
+seed: 42
+
+input:
+  abundance_table: "output/abundance_table_species.tsv"
+  metadata: null
+  params_json: "output/params.json"
+  wf16s_output_root: null
+  tax_column: "tax"
+  aggregate_columns: ["total"]
+  include_samples: null
+  assignments:
+    sample1: "output/reads_assignments/sample1_lineages.kraken2.assignments.tsv"
+  kraken2_reports:
+    sample1: "output/kraken2/sample1.kraken2.report.txt"
+  bracken_reports:
+    sample1: "output/bracken/sample1.kraken2_bracken.report"
+  params_by_sample: null
+  phylogenetic_tree: null
+  phylogenetic_tip_map: null
+
+output:
+  base_dir: "output_run"
+
+qc:
+  display_min_length: 250
+  display_max_length: 1000
