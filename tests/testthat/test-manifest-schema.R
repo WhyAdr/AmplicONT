@@ -321,3 +321,84 @@ test_that("manifest v2 revision 2 validates correctly and rejects invalid states
   manifest_bad_lock_identity$environment$package_locations[[1]]$lock_source <- ""
   expect_error(validate_manifest_v2(manifest_bad_lock_identity), "lock_source.*non-empty")
 })
+
+make_manifest_revision5_fixture <- function(samples = "S1", modules = c("qc"), classifier = "minimap2") {
+  manifest <- make_manifest_revision4_fixture(samples = samples, modules = modules)
+  manifest$schema_revision <- 5L
+  if (identical(classifier, "kraken2")) {
+    manifest$count_basis <- "bracken_species_estimates"
+    manifest$upstream_contract <- list(
+      classifier = "kraken2",
+      abundance_source = "bracken_species_estimates",
+      identity_coverage_active = FALSE,
+      database_set = "ncbi_16s_18s_28s_ITS",
+      taxonomic_rank = "S",
+      kraken2_confidence = 0,
+      bracken_threshold = 10L,
+      bracken_length_requested = NULL
+    )
+    manifest$inputs$kraken2_reports <- json_array(lapply(samples, function(s) {
+      list(sample_id = s, path = sprintf("kraken2/%s.report.txt", s),
+           size_bytes = 100, mtime_utc = "2026-09-07T00:00:00Z",
+           sha256 = paste(rep("1", 64L), collapse = ""))
+    }))
+    manifest$inputs$bracken_reports <- json_array(lapply(samples, function(s) {
+      list(sample_id = s, path = sprintf("bracken/%s.report", s),
+           size_bytes = 100, mtime_utc = "2026-09-07T00:00:00Z",
+           sha256 = paste(rep("2", 64L), collapse = ""))
+    }))
+    manifest$population_accounting <- stats::setNames(lapply(samples, function(s) {
+      list(N = 50L, C = 30L, U = 20L, E = 28L, T = 48L, D = 2L)
+    }), samples)
+  } else {
+    manifest$count_basis <- "minimap2_alignments"
+    manifest$upstream_contract <- list(
+      classifier = "minimap2",
+      abundance_source = "minimap2_alignments",
+      identity_coverage_active = TRUE,
+      database_set = "ncbi_16s_18s_28s_ITS",
+      taxonomic_rank = "S"
+    )
+  }
+  manifest
+}
+
+test_that("manifest v2 revision 5 validates correctly and rejects invalid states", {
+  manifest_m2 <- make_manifest_revision5_fixture(classifier = "minimap2")
+  expect_no_error(validate_manifest_v2(manifest_m2))
+
+  manifest_k2 <- make_manifest_revision5_fixture(classifier = "kraken2")
+  expect_no_error(validate_manifest_v2(manifest_k2))
+
+  # Missing count_basis
+  m_no_basis <- manifest_k2
+  m_no_basis$count_basis <- NULL
+  expect_error(validate_manifest_v2(m_no_basis), "missing required key")
+
+  # Mismatched count_basis for kraken2
+  m_bad_basis <- manifest_k2
+  m_bad_basis$count_basis <- "minimap2_alignments"
+  expect_error(validate_manifest_v2(m_bad_basis), "kraken2 requires bracken_species_estimates")
+
+  # Missing kraken2_reports on kraken2
+  m_no_krep <- manifest_k2
+  m_no_krep$inputs$kraken2_reports <- NULL
+  expect_error(validate_manifest_v2(m_no_krep), "kraken2 requires kraken2_reports")
+
+  # Incompatible accounting equality: N != C + U
+  m_bad_acct <- manifest_k2
+  m_bad_acct$population_accounting$S1$N <- 999L
+  expect_error(validate_manifest_v2(m_bad_acct), "N != C [+] U")
+
+  # Excess E > C
+  m_excess_e <- manifest_k2
+  m_excess_e$population_accounting$S1$E <- 40L
+  m_excess_e$population_accounting$S1$T <- 60L
+  m_excess_e$population_accounting$S1$D <- 0L
+  expect_error(validate_manifest_v2(m_excess_e), "E must satisfy 0 <= E <= C")
+
+  # Minimap2 with kraken reports configured
+  m_m2_kraken_rep <- manifest_m2
+  m_m2_kraken_rep$inputs$kraken2_reports <- manifest_k2$inputs$kraken2_reports
+  expect_error(validate_manifest_v2(m_m2_kraken_rep), "must be null for minimap2")
+})

@@ -100,6 +100,7 @@ if (!isTRUE(cfg$cli$validate_only) &&
 
   initial_inventory <- tryCatch(inventory_inputs(cfg), error = function(e) fatal("Preflight error", e))
   context <- tryCatch(build_context(cfg), error = function(e) fatal("Input validation error", e))
+  is_kraken <- identical(context$upstream_contract$classifier, "kraken2")
   tryCatch(validate_output_root(cfg, repo_root,
     extra_paths = unlist(context$bamstats, use.names = FALSE)),
     error = function(e) fatal("Preflight error", e))
@@ -112,7 +113,6 @@ preflight_warnings <- tryCatch(run_module_preflight(context, requested_modules),
 tryCatch(assert_inputs_unchanged(full_inventory), error = function(e) fatal("Preflight error", e))
 
 if (isTRUE(cfg$cli$validate_only)) {
-  is_kraken <- identical(context$upstream_contract$classifier, "kraken2")
   summary <- list(
     status = "validated", pipeline_version = pipeline_version, mode = context$mode,
     classifier = context$upstream_contract$classifier,
@@ -569,7 +569,9 @@ manifest <- list(
   git_commit = source_info$git_commit, git_dirty = source_info$git_dirty,
   source_digest_sha256 = source_info$source_digest_sha256,
   source_files = source_info$source_files,
-  schema_version = 2L, schema_revision = 4L, config_schema_version = cfg$schema_version,
+  schema_version = 2L, schema_revision = 5L, config_schema_version = cfg$schema_version,
+  count_basis = context$count_basis,
+  population_accounting = if (is_kraken) context$sample_accounting else NULL,
   run_status = if (any_failed) "failed" else "completed",
   start_time = utc_timestamp(start_time), end_time = utc_timestamp(end_time),
   duration_seconds = as.numeric(difftime(end_time, start_time, units = "secs")),

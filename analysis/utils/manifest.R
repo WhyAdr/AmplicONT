@@ -416,15 +416,19 @@ validate_manifest_v2_revision1 <- function(manifest, physical_root = NULL) {
 
 validate_manifest_v2_revision_core <- function(manifest, physical_root = NULL,
                                                revision = 2L, require_revision3 = FALSE,
-                                               require_revision4 = FALSE) {
+                                               require_revision4 = FALSE,
+                                               require_revision5 = FALSE) {
   if (!is.list(manifest) || is.null(names(manifest))) manifest_fail("<root>", "expected an object.")
   required <- c("pipeline", "pipeline_version", "schema_version", "schema_revision",
     "config_schema_version", "run_status", "start_time", "end_time", "duration_seconds",
     "samples", "command", "cli", "inputs", "modules", "owned_outputs", "preserved_unowned_outputs",
     "artifacts", "warnings", "package_versions", "environment", "output_root")
   missing <- setdiff(required, names(manifest))
-  if (isTRUE(require_revision3) || isTRUE(require_revision4)) {
+  if (isTRUE(require_revision3) || isTRUE(require_revision4) || isTRUE(require_revision5)) {
     missing <- unique(c(missing, setdiff(c("source_files", "exports"), names(manifest))))
+  }
+  if (isTRUE(require_revision5)) {
+    missing <- unique(c(missing, setdiff(c("upstream_contract", "count_basis"), names(manifest))))
   }
   if (length(missing)) manifest_fail("<root>", paste("missing required key(s):", paste(missing, collapse = ", ")))
 
@@ -507,7 +511,7 @@ validate_manifest_v2_revision_core <- function(manifest, physical_root = NULL,
   if (anyDuplicated(requested)) manifest_fail("cli.modules", "module names must be unique.")
   cli_fields <- c("validate_only", "keep_going", "overwrite", "allow_unlocked", "allow_dirty",
                   "online_preflight", "refresh_taxonomy", "krona")
-  if (isTRUE(require_revision3) || isTRUE(require_revision4)) {
+  if (isTRUE(require_revision3) || isTRUE(require_revision4) || isTRUE(require_revision5)) {
     cli_fields <- c(cli_fields, "allow_large_workload", "pavian")
   }
   for (field in cli_fields) {
@@ -515,7 +519,7 @@ validate_manifest_v2_revision_core <- function(manifest, physical_root = NULL,
       manifest_fail(paste0("cli.", field), "expected one logical value.")
     }
   }
-  if (isTRUE(require_revision4)) {
+  if (isTRUE(require_revision4) || isTRUE(require_revision5)) {
     validate_manifest_exports_revision4(manifest$exports, manifest)
   } else if (isTRUE(require_revision3)) {
     validate_manifest_exports(manifest$exports, manifest)
@@ -547,6 +551,118 @@ validate_manifest_v2_revision_core <- function(manifest, physical_root = NULL,
   bamstats_samples <- vapply(manifest$inputs$bamstats %||% list(), function(x) as.character(x$sample_id), character(1))
   if (length(setdiff(bamstats_samples, samples)) > 0L) {
     manifest_fail("inputs.bamstats", "contains sample IDs not present in samples.")
+  }
+
+  if (isTRUE(require_revision5)) {
+    assert_manifest_scalar(manifest$count_basis, "count_basis", "character")
+    if (!manifest$count_basis %in% c("minimap2_alignments", "bracken_species_estimates")) {
+      manifest_fail("count_basis", "invalid count_basis value.")
+    }
+
+    if (!is.list(manifest$upstream_contract) || is.null(names(manifest$upstream_contract))) {
+      manifest_fail("upstream_contract", "expected an object.")
+    }
+    uc <- manifest$upstream_contract
+    assert_manifest_scalar(uc$classifier, "upstream_contract.classifier", "character")
+    if (!uc$classifier %in% c("minimap2", "kraken2")) {
+      manifest_fail("upstream_contract.classifier", "invalid classifier.")
+    }
+    assert_manifest_scalar(uc$database_set, "upstream_contract.database_set", "character")
+    assert_manifest_scalar(uc$taxonomic_rank, "upstream_contract.taxonomic_rank", "character")
+
+    if (identical(uc$classifier, "kraken2")) {
+      if (!identical(manifest$count_basis, "bracken_species_estimates")) {
+        manifest_fail("count_basis", "kraken2 requires bracken_species_estimates count_basis.")
+      }
+      if (!identical(uc$abundance_source, "bracken_species_estimates")) {
+        manifest_fail("upstream_contract.abundance_source", "expected bracken_species_estimates.")
+      }
+      if (!identical(uc$identity_coverage_active, FALSE)) {
+        manifest_fail("upstream_contract.identity_coverage_active", "expected FALSE for kraken2.")
+      }
+      if (is.null(uc$kraken2_confidence) || !is.numeric(uc$kraken2_confidence) ||
+          uc$kraken2_confidence < 0 || uc$kraken2_confidence > 1) {
+        manifest_fail("upstream_contract.kraken2_confidence", "expected finite number in [0, 1].")
+      }
+      if (is.null(uc$bracken_threshold) || !is.numeric(uc$bracken_threshold) ||
+          uc$bracken_threshold < 0 || uc$bracken_threshold != floor(uc$bracken_threshold)) {
+        manifest_fail("upstream_contract.bracken_threshold", "expected nonnegative integer.")
+      }
+
+      if (is.null(manifest$inputs$kraken2_reports)) {
+        manifest_fail("inputs.kraken2_reports", "kraken2 requires kraken2_reports input collection.")
+      }
+      validate_manifest_input_collection(manifest$inputs$kraken2_reports, "inputs.kraken2_reports")
+      k_samples <- vapply(manifest$inputs$kraken2_reports %||% list(), function(x) as.character(x$sample_id), character(1))
+      if (!setequal(k_samples, samples)) {
+        manifest_fail("inputs.kraken2_reports", "must cover all samples.")
+      }
+
+      if (is.null(manifest$inputs$bracken_reports)) {
+        manifest_fail("inputs.bracken_reports", "kraken2 requires bracken_reports input collection.")
+      }
+      validate_manifest_input_collection(manifest$inputs$bracken_reports, "inputs.bracken_reports")
+      b_samples <- vapply(manifest$inputs$bracken_reports %||% list(), function(x) as.character(x$sample_id), character(1))
+      if (!setequal(b_samples, samples)) {
+        manifest_fail("inputs.bracken_reports", "must cover all samples.")
+      }
+
+      if (!is.null(manifest$inputs$params_by_sample)) {
+        validate_manifest_input_collection(manifest$inputs$params_by_sample, "inputs.params_by_sample")
+        p_samples <- vapply(manifest$inputs$params_by_sample %||% list(), function(x) as.character(x$sample_id), character(1))
+        if (!setequal(p_samples, samples)) {
+          manifest_fail("inputs.params_by_sample", "must cover all samples.")
+        }
+      }
+
+      if (!is.list(manifest$population_accounting) || is.null(names(manifest$population_accounting))) {
+        manifest_fail("population_accounting", "expected an object.")
+      }
+      pa <- manifest$population_accounting
+      if (!setequal(names(pa), samples)) {
+        manifest_fail("population_accounting", "must contain an entry for each sample.")
+      }
+      for (s in samples) {
+        sa <- pa[[s]]
+        if (!is.list(sa)) manifest_fail(paste0("population_accounting.", s), "expected an object.")
+        for (f in c("N", "C", "U", "E", "T", "D")) {
+          val <- sa[[f]]
+          if (!is.numeric(val) || length(val) != 1L || is.na(val) || !is.finite(val) ||
+              val < 0 || val != floor(val)) {
+            manifest_fail(paste0("population_accounting.", s, ".", f), "expected nonnegative safe integer.")
+          }
+        }
+        if (sa$N != sa$C + sa$U) {
+          manifest_fail("population_accounting", sprintf("N != C + U for sample '%s'.", s))
+        }
+        if (sa$T != sa$E + sa$U) {
+          manifest_fail("population_accounting", sprintf("T != E + U for sample '%s'.", s))
+        }
+        if (sa$E < 0 || sa$E > sa$C) {
+          manifest_fail("population_accounting", sprintf("E must satisfy 0 <= E <= C for sample '%s'.", s))
+        }
+        if (sa$D != sa$C - sa$E) {
+          manifest_fail("population_accounting", sprintf("D != C - E for sample '%s'.", s))
+        }
+      }
+    } else {
+      # minimap2
+      if (!identical(manifest$count_basis, "minimap2_alignments")) {
+        manifest_fail("count_basis", "minimap2 requires minimap2_alignments count_basis.")
+      }
+      if (!identical(uc$abundance_source, "minimap2_alignments")) {
+        manifest_fail("upstream_contract.abundance_source", "expected minimap2_alignments.")
+      }
+      if (!identical(uc$identity_coverage_active, TRUE)) {
+        manifest_fail("upstream_contract.identity_coverage_active", "expected TRUE for minimap2.")
+      }
+      if (!is.null(manifest$inputs$kraken2_reports)) {
+        manifest_fail("inputs.kraken2_reports", "must be null for minimap2.")
+      }
+      if (!is.null(manifest$inputs$bracken_reports)) {
+        manifest_fail("inputs.bracken_reports", "must be null for minimap2.")
+      }
+    }
   }
 
   # Modules validation
@@ -833,13 +949,22 @@ validate_manifest_v2_revision4 <- function(manifest, physical_root = NULL) {
                                      require_revision4 = TRUE)
 }
 
+validate_manifest_v2_revision5 <- function(manifest, physical_root = NULL) {
+  validate_manifest_v2_revision_core(manifest, physical_root = physical_root,
+                                     revision = 5L, require_revision3 = TRUE,
+                                     require_revision4 = TRUE,
+                                     require_revision5 = TRUE)
+}
+
 validate_manifest_v2 <- function(manifest, physical_root = NULL) {
   if (!is.list(manifest) || is.null(names(manifest))) manifest_fail("<root>", "expected an object.")
   rev <- manifest$schema_revision
-  if (identical(rev, 3L)) {
-    validate_manifest_v2_revision3(manifest, physical_root = physical_root)
+  if (identical(rev, 5L)) {
+    validate_manifest_v2_revision5(manifest, physical_root = physical_root)
   } else if (identical(rev, 4L)) {
     validate_manifest_v2_revision4(manifest, physical_root = physical_root)
+  } else if (identical(rev, 3L)) {
+    validate_manifest_v2_revision3(manifest, physical_root = physical_root)
   } else if (identical(rev, 2L)) {
     validate_manifest_v2_revision2(manifest, physical_root = physical_root)
   } else if (identical(rev, 1L)) {

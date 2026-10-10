@@ -168,8 +168,9 @@ assert_exact_sample_order <- function(data, expected_order, column, label) {
 stopifnot(identical(manifest$run_status, "completed"))
 stopifnot(manifest$mode %in% c("single", "cohort"))
 stopifnot(identical(manifest$schema_version, 2L))
-stopifnot(manifest$schema_revision %in% c(3L, 4L))
-is_manifest_revision4 <- identical(manifest$schema_revision, 4L)
+stopifnot(manifest$schema_revision %in% c(3L, 4L, 5L))
+is_manifest_revision4 <- manifest$schema_revision >= 4L
+is_manifest_revision5 <- identical(manifest$schema_revision, 5L)
 stopifnot(is.character(manifest$transaction_id), length(manifest$transaction_id) == 1L,
           grepl("^tx-[0-9a-f]{64}$", manifest$transaction_id))
 stopifnot(identical(manifest$config_schema_version, 1L))
@@ -189,11 +190,31 @@ stopifnot(grepl("^R version 4[.]", manifest$interpreter$r))
 stopifnot(grepl("Python 3[.]12", manifest$interpreter$python))
 stopifnot(identical(manifest$cli$refresh_taxonomy, FALSE))
 stopifnot(identical(manifest$taxonomy$transaction_id, manifest$transaction_id))
-stopifnot(identical(manifest$upstream_contract$classifier, "minimap2"))
-stopifnot(identical(manifest$upstream_contract$database_set, "ncbi_16s_18s_28s_ITS"))
+
+classifier <- manifest$upstream_contract$classifier %||% "minimap2"
+stopifnot(classifier %in% c("minimap2", "kraken2"))
+stopifnot(manifest$upstream_contract$database_set %in% c("ncbi_16s_18s_28s_ITS", "ncbi_16s_18s"))
 stopifnot(identical(manifest$upstream_contract$taxonomic_rank, "S"))
-stopifnot(is.null(manifest$upstream_contract$workflow_version))
-stopifnot(is.null(manifest$upstream_contract$workflow_revision))
+
+if (identical(classifier, "kraken2")) {
+  stopifnot(identical(manifest$count_basis, "bracken_species_estimates"))
+  stopifnot(identical(manifest$upstream_contract$abundance_source, "bracken_species_estimates"))
+  stopifnot(identical(manifest$upstream_contract$identity_coverage_active, FALSE))
+  stopifnot(is.list(manifest$population_accounting))
+  for (s in release_samples) {
+    pa <- manifest$population_accounting[[s]]
+    stopifnot(is.list(pa))
+    stopifnot(pa$N == pa$C + pa$U)
+    stopifnot(pa$T == pa$E + pa$U)
+    stopifnot(pa$D == pa$C - pa$E)
+    stopifnot(0 <= pa$E, pa$E <= pa$C)
+  }
+} else {
+  stopifnot(identical(manifest$upstream_contract$classifier, "minimap2"))
+  stopifnot(identical(manifest$upstream_contract$database_set, "ncbi_16s_18s_28s_ITS"))
+  stopifnot(is.null(manifest$upstream_contract$workflow_version))
+  stopifnot(is.null(manifest$upstream_contract$workflow_revision))
+}
 independent_sources <- independent_source_inventory(repo_root)
 assert_source_inventory_matches(manifest, independent_sources)
 
@@ -1433,6 +1454,40 @@ if (identical(manifest$project_name, "AmbarAyunda_16S_Amplicon")) {
                       as.numeric(expected_classified)))
   stopifnot(identical(as.numeric(composition$UnclassifiedReads[composition_index]),
                       as.numeric(expected_unclassified)))
+} else if (identical(manifest$project_name, "synthetic_kraken2_test")) {
+  stopifnot(identical(manifest$upstream_contract$classifier, "kraken2"))
+  stopifnot(identical(release_samples, "sample1"))
+  stopifnot(sum(reconciliation$TotalReads) == 48L)
+  stopifnot(sum(reconciliation$AbundanceClassified) == 28L)
+  stopifnot(sum(reconciliation$AbundanceUnclassified) == 20L)
+  stopifnot(accounting$RawTotal_N == 50L)
+  stopifnot(accounting$RawClassified_C == 30L)
+  stopifnot(accounting$RawUnclassified_U == 20L)
+  stopifnot(accounting$BrackenEstimate_E == 28L)
+  stopifnot(accounting$Difference_D == 2L)
+  stopifnot(isFALSE(investigation$BamstatsAvailable[1]))
+} else if (identical(manifest$project_name, "wf-16s_Biomecon-ITS-kraken2")) {
+  stopifnot(identical(manifest$upstream_contract$classifier, "kraken2"))
+  stopifnot(accounting$RawTotal_N == 40204L)
+  stopifnot(accounting$RawClassified_C == 15559L)
+  stopifnot(accounting$RawUnclassified_U == 24645L)
+  stopifnot(accounting$BrackenEstimate_E == 13984L)
+  stopifnot(accounting$AbundanceTotal == 38629L)
+  stopifnot(accounting$Difference_D == 1575L)
+  stopifnot(isFALSE(investigation$BamstatsAvailable[1]))
+} else if (identical(manifest$project_name, "wf-16s_Knegative-ITS-kraken2")) {
+  stopifnot(identical(manifest$upstream_contract$classifier, "kraken2"))
+  stopifnot(accounting$RawTotal_N == 26643L)
+  stopifnot(accounting$RawClassified_C == 5469L)
+  stopifnot(accounting$RawUnclassified_U == 21174L)
+  stopifnot(accounting$BrackenEstimate_E == 4796L)
+  stopifnot(accounting$AbundanceTotal == 25970L)
+  stopifnot(accounting$Difference_D == 673L)
+  stopifnot(isFALSE(investigation$BamstatsAvailable[1]))
+} else if (identical(manifest$upstream_contract$classifier, "kraken2")) {
+  stopifnot(all(accounting$Difference_D == accounting$RawClassified_C - accounting$BrackenEstimate_E))
+  stopifnot(all(reconciliation$ReconciliationPass == TRUE))
+  stopifnot(all(!investigation$BamstatsAvailable))
 } else if (identical(manifest$mode, "cohort")) {
   # Cohort release fixtures are intentionally data-agnostic here. The common
   # reconciliation, composition, and module-contract checks above remain
