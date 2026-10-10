@@ -4,6 +4,39 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-11
+
+### Added
+
+- Add full support for Oxford Nanopore `wf-16s` Kraken2 and Bracken taxonomic
+  classification pipelines alongside existing Minimap2 pipelines.
+- Implement strict input contract parsers for 6-column Kraken2 read assignments,
+  Kraken2 reports (kreport), and 7-column Bracken species abundance estimates.
+- Reconcile read-level classification population ($N = C + U$) with species-level
+  abundance estimation ($T = E + U$, $D = C - E$) under distinct mathematical
+  models without forced equality or synthetic count manufacturing.
+- Introduce manifest schema v2 revision 5 documenting `count_basis`,
+  `upstream_contract`, `population_accounting`, and classified report collections
+  with complete backward compatibility for schema revisions 1–4.
+- Add standalone cohort input merger utility `analysis/utils/merge_wf16s_cohort.R`
+  supporting multi-bundle compatibility validation, full taxonomic outer-join,
+  zero-filling of absent taxa, and atomic staging/publication.
+- Add comprehensive test fixtures and unit tests covering Kraken2/Bracken
+  accounting, threshold assertions, and cohort mergers.
+
+### Changed
+
+- Propagate `count_basis` across kreport, Pavian, Krona, and FAPROTAX exports
+  reflecting Bracken species estimates when running on a Kraken2 upstream contract.
+- Adapt QC diagnostics to display read versus estimate metrics and dynamic
+  amplicon length subtitles for non-16S databases (such as ITS).
+
+### Fixed
+
+- Guard `partition_minimap2_failures` and BAM diagnostics when processing
+  Kraken2 upstream bundles without BAM alignment files.
+- Enforce strict upstream contract compatibility across all samples in cohort runs.
+
 ## [0.4.9] - 2026-09-24
 
 ### Added

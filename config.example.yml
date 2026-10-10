@@ -41,6 +41,15 @@ input:
   assignments:
     AmbarAyunda_minimap2_16S: "wf16s-inputs/output_AAy/reads_assignments/AmbarAyunda_minimap2_16S_lineages.minimap2.assignments.tsv"
 
+  # Required per-sample Kraken2 reports when classifier is kraken2 (null for minimap2)
+  kraken2_reports: null
+
+  # Required per-sample Bracken species reports when classifier is kraken2 (null for minimap2)
+  bracken_reports: null
+
+  # Optional per-sample params.json mappings for multi-bundle cohort provenance
+  params_by_sample: null
+
   # Optional phylogenetic alpha-diversity inputs. If no mapping is supplied,
   # tree tip labels must exactly equal the classified TaxonPath strings.
   phylogenetic_tree: null
