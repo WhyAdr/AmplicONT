@@ -3,6 +3,7 @@
 # =============================================================================
 
 source(file.path("..", "..", "analysis", "utils", "config.R"))
+source(file.path("..", "..", "analysis", "utils", "metrics.R"))
 
 test_that("load_config loads default config.yml and resolves relative paths to config dir", {
   config_path <- file.path("..", "..", "config.yml")
@@ -256,4 +257,20 @@ test_that("alpha q orders and phylogenetic input pairing fail closed", {
   cfg <- get_default_config()
   cfg$alpha$resample_depth <- .Machine$integer.max + 1
   expect_error(validate_config(cfg), "alpha.resample_depth")
+})
+
+test_that("resource budgets validate every workload guard and accept q orders without key collisions", {
+  cfg <- get_default_config()
+  cfg$resource_budgets$max_rarefaction_cells <- 1.5
+  expect_error(validate_config(cfg), "resource_budgets.max_rarefaction_cells")
+  cfg <- get_default_config()
+  cfg$resource_budgets$max_phylogenetic_vcv_cells <- 0
+  expect_error(validate_config(cfg), "resource_budgets.max_phylogenetic_vcv_cells")
+
+  cfg <- get_default_config()
+  cfg$alpha$hill_orders <- c(1, 1 + 1e-15)
+  cfg$alpha$renyi_orders <- c(1, 1 + 1e-15)
+  expect_no_error(validate_config(cfg))
+  keys <- alpha_metric_registry(cfg$alpha$hill_orders, cfg$alpha$renyi_orders)$MetricKey
+  expect_identical(anyDuplicated(keys), 0L)
 })

@@ -543,6 +543,14 @@ a sibling taxonomy transaction journal and hash comparisons restore or forward-r
 commit without overwriting an unrelated cache revision. True zero-mutation
 `--validate-only` checks perform in-memory AST syntax validation without writing bytecode or touch files.
 
+The cohort merger uses the same destination lock and its own schema-validated sibling journal. It
+fingerprints the complete prior bundle before replacement, verifies the renamed backup and staged
+bundle, and retains recovery material whenever either changes. Resource preflight uses the requested
+modules in both validate-only and execution modes. `resource_budgets` names the units it limits:
+sample-by-sample matrix cells, sample-pairs multiplied by taxa, samples multiplied by admissible
+permutation rows, sample-by-taxon resampling cells multiplied by iterations, alpha long-table rows,
+and original-tree covariance cells.
+
 The tracked assignment fixture retains its typed-column digest under the streamed
 reader. On this Windows R 4.5.3 host, the manual 250,000-row benchmark completed
 in 13.33 seconds, returned a 30.53 MiB data frame, and observed a 343.27 MiB
@@ -561,6 +569,7 @@ on each target host for local performance evidence.
 | `--online-preflight` | With `--validate-only --refresh-taxonomy`, perform full read-only online resolution; rejected during execution |
 | `--allow-unlocked` | Development-only escape hatch for a missing/mismatched lock (recorded as unlocked) |
 | `--allow-dirty` | Development-only escape hatch for maintained source changes (recorded as dirty) |
+| `--allow-large-workload` | Override a configured resource budget after reviewing validate-only preflight estimates |
 | `--krona` | Enable Krona TSV export and builtin or policy-selected HTML rendering (requires `kreport`) |
 | `--pavian` | Enable official-Pavian-compatible `.kreport` integration plus the builtin offline explorer and Sankey (requires `kreport`) |
 | `--overwrite` | Replace the complete set of pipeline-owned products in a validated output root |

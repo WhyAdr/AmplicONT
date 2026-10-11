@@ -126,6 +126,16 @@ shared_taxa:
   minimum_count: 1
   group_prevalence: 0.5
 
+# Workload limits use explicit matrix/work units and are checked in validate-only
+# preflight as well as immediately before module execution.
+resource_budgets:
+  max_distance_cells: 10000000
+  max_distance_work: 1000000000
+  max_permutation_cells: 10000000
+  max_rarefaction_cells: 50000000
+  max_rarefaction_rows: 10000000
+  max_phylogenetic_vcv_cells: 10000000
+
 taxonomy:
   cache: "wf16s-inputs/output_AAy/taxonomy_cache.json"
   # YAML is deliberately offline-only. Use --refresh-taxonomy for an online run.

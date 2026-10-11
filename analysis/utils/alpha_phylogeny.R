@@ -25,7 +25,8 @@ read_phylogenetic_tip_map <- function(path) {
   map
 }
 
-prepare_alpha_phylogeny <- function(cfg, positive_taxon_paths) {
+prepare_alpha_phylogeny <- function(cfg, positive_taxon_paths, precompute_covariance = FALSE,
+                                    vcv_fn = ape::vcv.phylo) {
   tree_path <- cfg$input$phylogenetic_tree %||% NULL
   map_path <- cfg$input$phylogenetic_tip_map %||% NULL
   affected <- c("faith_pd", "psr", "pse")
@@ -83,7 +84,7 @@ prepare_alpha_phylogeny <- function(cfg, positive_taxon_paths) {
   keep <- unique(mapped)
   extra <- setdiff(tree$tip.label, keep)
   mapping <- stats::setNames(map$TipLabel, map$TaxonPath)
-  list(
+  result <- list(
     # Keep the original root and its stem paths. Physically dropping an
     # outgroup can re-root/collapse the retained topology and change rooted PD
     # and VCV-derived metrics. Extra tips are excluded by subsetting observed
@@ -96,6 +97,10 @@ prepare_alpha_phylogeny <- function(cfg, positive_taxon_paths) {
     pruned_tip_count = length(extra),
     pruning_method = "extra tips excluded from metric traversal; original root retained"
   )
+  if (isTRUE(precompute_covariance)) {
+    result$validated_precomputed_covariance <- vcv_fn(tree, corr = TRUE)
+  }
+  result
 }
 
 faith_pd_rooted <- function(tree, observed_tips) {
@@ -131,7 +136,8 @@ calc_phylogenetic_alpha <- function(counts, phylogeny,
   pd <- faith_pd_rooted(phylogeny$tree, names(counts))
   psr <- pse <- NA_real_
   if (S > 1L) {
-    covariance <- ape::vcv.phylo(phylogeny$tree, corr = TRUE)
+    covariance <- phylogeny$validated_precomputed_covariance %||%
+      ape::vcv.phylo(phylogeny$tree, corr = TRUE)
     covariance <- covariance[names(counts), names(counts), drop = FALSE]
     psv <- (S * sum(diag(covariance)) - sum(covariance)) / (S * (S - 1))
     psr <- psv * S

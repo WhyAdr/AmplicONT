@@ -150,6 +150,87 @@ test_that("registry metrics satisfy closed-form equal and skewed-count contracts
                1 - (2 / pi) * atan(mean((log(c(8, 1, 1)) - mean(log(c(8, 1, 1))))^2)))
 })
 
+test_that("Renyi entropy stays stable from q zero through large orders and near one", {
+  uniform <- c(0.5, 0.5)
+  orders <- c(0, 1 - 1e-15, 1, 1 + 1e-15, 2, 2000)
+  values <- vapply(orders, function(q) renyi_entropy(uniform, q), numeric(1))
+  expect_true(all(is.finite(values)))
+  expect_equal(values, rep(log(2), length(orders)), tolerance = 1e-12)
+
+  skewed <- c(0.9, 0.1)
+  skewed_values <- vapply(orders, function(q) renyi_entropy(skewed, q), numeric(1))
+  expect_true(all(is.finite(skewed_values)))
+  expect_true(all(skewed_values >= -1e-12 & skewed_values <= log(2) + 1e-12))
+  expect_equal(skewed_values[orders == 2000], -log(0.9), tolerance = 1e-3)
+  expect_equal(exp(renyi_entropy(uniform, 2000)), 2, tolerance = 1e-12)
+})
+
+test_that("round-trip q metric tokens keep adjacent representable orders distinct", {
+  adjacent <- c(1, 1 + 1e-15)
+  registry <- alpha_metric_registry(hill_orders = adjacent, renyi_orders = adjacent)
+  expect_equal(length(unique(registry$MetricKey[grepl("^hill_q", registry$MetricKey)])), 2L)
+  expect_equal(length(unique(registry$MetricKey[grepl("^renyi_q", registry$MetricKey)])), 2L)
+  result <- calc_alpha_metric_long(c(a = 10, b = 10), adjacent, adjacent)
+  expect_equal(sum(grepl("^hill_q", result$MetricKey)), 2L)
+  expect_equal(sum(grepl("^renyi_q", result$MetricKey)), 2L)
+})
+
+test_that("vegan rarefaction has an explicit 32-bit numeric boundary", {
+  just_below <- c(a = as.double(.Machine$integer.max - 1), b = 1)
+  supported <- vegan_rarefaction_domain(just_below)
+  expect_true(supported$available)
+  expect_equal(supported$total_count, .Machine$integer.max)
+  curve <- calc_analytical_rarefaction(just_below, n_points = 2L)
+  expect_equal(nrow(curve), 2L)
+  resamples <- calc_rarefaction_resamples(just_below, 1000L, n_iterations = 1L)
+  expect_equal(nrow(resamples), 1L)
+
+  beyond <- c(a = 3e9, b = 3e9)
+  unsupported <- vegan_rarefaction_domain(beyond)
+  expect_false(unsupported$available)
+  expect_error(calc_analytical_rarefaction(beyond), "E_RAREFACTION_NUMERIC_DOMAIN")
+  expect_error(calc_rarefaction_resamples(beyond, 1000L, n_iterations = 1L),
+               "E_RAREFACTION_NUMERIC_DOMAIN")
+
+  one_over_total <- c(a = as.double(.Machine$integer.max - 1), b = 2)
+  expect_false(vegan_rarefaction_domain(one_over_total)$available)
+  expect_error(calc_analytical_rarefaction(one_over_total), "E_RAREFACTION_NUMERIC_DOMAIN")
+  one_over_cell <- c(a = as.double(.Machine$integer.max) + 1, b = 1)
+  expect_false(vegan_rarefaction_domain(one_over_cell)$available)
+  expect_error(calc_rarefaction_resamples(one_over_cell, 1000L, n_iterations = 1L),
+               "E_RAREFACTION_NUMERIC_DOMAIN")
+})
+
+test_that("unsupported rarefaction retains full-depth alpha metrics and reports each skip", {
+  root <- tempfile("large_rarefaction_skip_")
+  dir.create(root)
+  abundance <- data.frame(
+    tax = c("Unclassified;Unknown;Unknown;Unknown;Unknown;Unknown;Unknown;Unknown",
+            "Bacteria;Bacillati;Bacillota;Bacilli;Bacillales;Bacillaceae;Bacillus;A",
+            "Bacteria;Bacillati;Bacillota;Bacilli;Bacillales;Bacillaceae;Bacillus;B"),
+    S1 = c(1, 3e9, 3e9), total = c(1, 3e9, 3e9), check.names = FALSE
+  )
+  abundance_path <- file.path(root, "large_counts.tsv")
+  write.table(abundance, abundance_path, sep = "\t", row.names = FALSE, quote = FALSE)
+  cfg <- get_default_config()
+  cfg$input$abundance_table <- abundance_path
+  cfg$input$params_json <- create_temp_params(root)
+  cfg$alpha$rarefaction_points <- 2L
+  cfg$alpha$resample_depth <- 1000L
+  cfg$alpha$resample_iterations <- 1L
+  cfg$output$base_dir <- file.path(root, "output")
+  cfg$output$dirs <- list(alpha = file.path(cfg$output$base_dir, "02_Alpha_Diversity"))
+  result <- run_alpha(build_context(cfg))
+  expect_true(any(grepl("E_RAREFACTION_NUMERIC_DOMAIN", result$warnings, fixed = TRUE)))
+  metrics <- read.delim(file.path(cfg$output$dirs$alpha, "alpha_diversity.tsv"), check.names = FALSE)
+  expect_equal(metrics$`Shannon (H)`, log(2), tolerance = 1e-12)
+  skips <- read.delim(file.path(cfg$output$dirs$alpha, "rarefaction_availability.tsv"),
+                      check.names = FALSE)
+  expect_setequal(skips$Operation, c("analytical_curve", "resampling"))
+  expect_true(all(skips$ReasonCode == "E_RAREFACTION_NUMERIC_DOMAIN"))
+  expect_true(file.exists(file.path(cfg$output$dirs$alpha, "rarefaction_curve_skipped.tsv")))
+})
+
 test_that("undefined alpha domains are explicit and never NaN or infinite", {
   empty <- calc_alpha_metric_long(numeric(0))
   expect_false(any(empty$Valid))
@@ -214,12 +295,50 @@ test_that("phylogenetic alpha uses rooted branch lengths and explicit path mappi
   expect_equal(rooted$pruned_tip_count, 1)
   expect_match(rooted$pruning_method, "original root retained")
 
+  vcv_calls <- 0L
+  cached <- prepare_alpha_phylogeny(
+    cfg, two_map$TaxonPath, precompute_covariance = TRUE,
+    vcv_fn = function(tree, corr) {
+      vcv_calls <<- vcv_calls + 1L
+      ape::vcv.phylo(tree, corr = corr)
+    }
+  )
+  calc_phylogenetic_alpha(c(P1 = 1, P2 = 1), cached)
+  calc_phylogenetic_alpha(c(P1 = 2, P2 = 1), cached)
+  expect_equal(vcv_calls, 1L)
+
   cfg$input$phylogenetic_tip_map <- NULL
   expect_error(prepare_alpha_phylogeny(cfg, map$TaxonPath), "Mapped phylogenetic tip")
   cfg$input$phylogenetic_tree <- NULL
   skipped <- prepare_alpha_phylogeny(cfg, map$TaxonPath)
   expect_false(skipped$enabled)
   expect_equal(skipped$skip$Status, "Skipped")
+})
+
+test_that("phylogenetic covariance budgets reject before VCV allocation", {
+  root <- tempfile("phylo_vcv_budget_")
+  dir.create(root)
+  cfg <- get_default_config()
+  cfg$input$abundance_table <- create_temp_abundance(root, n_species = 5L, sample_names = "S1")
+  cfg$input$params_json <- create_temp_params(root)
+  preliminary <- build_context(cfg)
+  class_matrix <- preliminary$count_matrix[-preliminary$unclass_index, , drop = FALSE]
+  paths <- preliminary$taxonomy$TaxonPath[-preliminary$unclass_index][rowSums(class_matrix) > 0]
+  tip_labels <- paste0("tip", seq_len(25L))
+  tree_path <- file.path(root, "tree.nwk")
+  map_path <- file.path(root, "map.tsv")
+  ape::write.tree(ape::rtree(length(tip_labels), tip.label = tip_labels), tree_path)
+  write.table(data.frame(TaxonPath = paths, TipLabel = tip_labels[seq_along(paths)]),
+              map_path, sep = "\t", row.names = FALSE, quote = FALSE)
+  cfg$input$phylogenetic_tree <- tree_path
+  cfg$input$phylogenetic_tip_map <- map_path
+  cfg$resource_budgets$max_phylogenetic_vcv_cells <- 1L
+  cfg$output$base_dir <- file.path(root, "output")
+  cfg$output$dirs <- list(alpha = file.path(cfg$output$base_dir, "02_Alpha_Diversity"))
+  context <- build_context(cfg)
+  expect_error(assert_module_workload(context, "alpha"),
+               "E_RESOURCE_BUDGET.*phylogenetic_vcv_cells")
+  expect_false(dir.exists(cfg$output$base_dir))
 })
 
 test_that("alpha module emits canonical long tables and fixed non-phylogenetic figures", {
@@ -286,7 +405,7 @@ test_that("a valid tree and exact tip map produce the complete 02e contract", {
   budget_cfg$resource_budgets$max_rarefaction_rows <- 59L
   budget_context <- context
   budget_context$config <- budget_cfg
-  expect_error(run_module_preflight(budget_context, "alpha"), "60 rows")
+  expect_error(run_module_preflight(budget_context, "alpha"), "60 long-table metric rows")
   result <- run_alpha(context)
   expect_true("02e_resample_boxplots_phylogenetic.png" %in% basename(result$outputs))
   expect_false("alpha_phylogeny_skipped.tsv" %in% basename(result$outputs))

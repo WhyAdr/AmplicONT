@@ -73,9 +73,14 @@ build_alpha_resample_plot <- function(long_table, registry, figure_key, title,
 
 run_alpha <- function(context) {
   cfg <- context$config
+  if (exists("assert_module_workload", mode = "function")) {
+    assert_module_workload(context, "alpha")
+  }
   alpha_dir <- cfg$output$dirs$alpha
   dir.create(alpha_dir, recursive = TRUE, showWarnings = FALSE)
   all_outputs <- character(0)
+  alpha_warnings <- character(0)
+  rarefaction_skips <- list()
 
   seed <- cfg$seed %||% 42L
   n_points <- cfg$alpha$rarefaction_points %||% 25L
@@ -92,7 +97,9 @@ run_alpha <- function(context) {
   rownames(class_matrix) <- taxon_paths
   samples <- context$samples
   positive_paths <- taxon_paths[rowSums(class_matrix) > 0]
-  phylogeny <- prepare_alpha_phylogeny(cfg, positive_paths)
+  phylogeny <- prepare_alpha_phylogeny(
+    cfg, positive_paths, precompute_covariance = TRUE
+  )
 
   definitions_path <- file.path(alpha_dir, "alpha_metric_definitions.tsv")
   write_alpha_tsv(registry, definitions_path)
@@ -153,17 +160,41 @@ run_alpha <- function(context) {
 
   rare_curve_records <- list()
   for (sample_id in samples) {
-    curve <- calc_analytical_rarefaction(class_matrix[, sample_id], n_points = n_points)
+    curve <- tryCatch(
+      calc_analytical_rarefaction(class_matrix[, sample_id], n_points = n_points),
+      wf16s_rarefaction_domain_error = function(e) {
+        rarefaction_skips[[length(rarefaction_skips) + 1L]] <<- data.frame(
+          Operation = "analytical_curve", SampleID = sample_id,
+          Status = "Skipped", ReasonCode = "E_RAREFACTION_NUMERIC_DOMAIN",
+          Reason = conditionMessage(e), stringsAsFactors = FALSE
+        )
+        alpha_warnings <<- unique(c(alpha_warnings, conditionMessage(e)))
+        data.frame(depth = numeric(0), mean_richness = numeric(0), sd_richness = numeric(0))
+      }
+    )
     if (nrow(curve)) {
       curve$SampleID <- sample_id
       rare_curve_records[[sample_id]] <- curve
     }
   }
-  rare_curve_combined <- do.call(rbind, rare_curve_records)
+  rare_curve_combined <- if (length(rare_curve_records)) do.call(rbind, rare_curve_records) else
+    data.frame(depth = numeric(0), mean_richness = numeric(0), sd_richness = numeric(0),
+               SampleID = character(0), stringsAsFactors = FALSE)
   rare_tsv <- file.path(alpha_dir, "rarefaction_curve.tsv")
   write_alpha_tsv(rare_curve_combined, rare_tsv)
   all_outputs <- c(all_outputs, rare_tsv)
 
+  if (!nrow(rare_curve_combined)) {
+    skip_path <- file.path(alpha_dir, "rarefaction_curve_skipped.tsv")
+    write_alpha_tsv(data.frame(
+      Status = "Skipped",
+      Reason = if (length(rarefaction_skips)) {
+        "Analytical rarefaction is unavailable for the numeric domain recorded in rarefaction_availability.tsv."
+      } else "No samples have classified reads for analytical rarefaction.",
+      stringsAsFactors = FALSE
+    ), skip_path)
+    all_outputs <- c(all_outputs, skip_path)
+  } else {
   p_curve <- ggplot(rare_curve_combined,
                     aes(x = depth, y = mean_richness, group = SampleID, color = SampleID)) +
     geom_ribbon(aes(ymin = mean_richness - sd_richness,
@@ -190,6 +221,7 @@ run_alpha <- function(context) {
   p_curve_path <- file.path(alpha_dir, "02a_rarefaction_curve.png")
   save_abundance_plot(context, p_curve_path, p_curve, width = 8, height = 5.5, dpi = 150)
   all_outputs <- c(all_outputs, p_curve_path)
+  }
 
   sample_depths <- colSums(class_matrix)
   # A one-read classified sample still has a valid depth-one sensitivity
@@ -201,10 +233,22 @@ run_alpha <- function(context) {
   for (sample_id in samples) {
     counts <- class_matrix[, sample_id]
     if (sum(counts) >= realized_depth && realized_depth > 0) {
-      resampled <- calc_rarefaction_resamples(
-        counts, realized_depth, n_iterations, derive_sample_seed(seed, sample_id),
-        hill_orders, renyi_orders, phylogeny
+      resampled <- tryCatch(
+        calc_rarefaction_resamples(
+          counts, realized_depth, n_iterations, derive_sample_seed(seed, sample_id),
+          hill_orders, renyi_orders, phylogeny
+        ),
+        wf16s_rarefaction_domain_error = function(e) {
+          rarefaction_skips[[length(rarefaction_skips) + 1L]] <<- data.frame(
+            Operation = "resampling", SampleID = sample_id,
+            Status = "Skipped", ReasonCode = "E_RAREFACTION_NUMERIC_DOMAIN",
+            Reason = conditionMessage(e), stringsAsFactors = FALSE
+          )
+          alpha_warnings <<- unique(c(alpha_warnings, conditionMessage(e)))
+          NULL
+        }
       )
+      if (is.null(resampled)) next
       long <- attr(resampled, "alpha_long")
       attr(resampled, "alpha_long") <- NULL
       resampled$SampleID <- sample_id
@@ -215,6 +259,12 @@ run_alpha <- function(context) {
         "Parameter", "Value", "Valid", "Reason"
       )]
     }
+  }
+
+  if (length(rarefaction_skips)) {
+    availability_path <- file.path(alpha_dir, "rarefaction_availability.tsv")
+    write_alpha_tsv(do.call(rbind, rarefaction_skips), availability_path)
+    all_outputs <- c(all_outputs, availability_path)
   }
 
   if (length(resample_records)) {
@@ -346,5 +396,5 @@ run_alpha <- function(context) {
     all_outputs <- c(all_outputs, diff_file)
   }
 
-  list(status = "completed", outputs = all_outputs)
+  list(status = "completed", outputs = all_outputs, warnings = unique(alpha_warnings))
 }

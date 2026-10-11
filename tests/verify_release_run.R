@@ -56,7 +56,7 @@ source_scope_allowed <- function(relative) {
       relative %in% c("VERSION", "renv.lock", ".Rprofile", "renv/activate.R",
                       "renv/settings.json")) return(TRUE)
   if (startsWith(relative, "analysis/vendor/krona-2.8.1/")) return(TRUE)
-  startsWith(relative, "analysis/") && grepl("[.](R|r|py|json|ya?ml)$", relative, perl = TRUE)
+  startsWith(relative, "analysis/") && grepl("[.](R|r|py|js|json|ya?ml)$", relative, perl = TRUE)
 }
 
 independent_source_inventory <- function(root) {
@@ -461,12 +461,15 @@ stopifnot(all(is.finite(classified_counts)), all(classified_counts >= 0),
           all(classified_counts == floor(classified_counts)))
 if (identical(manifest$modules$alpha$status, "completed")) {
   q_token <- function(q) {
-    value <- format(q, scientific = FALSE, trim = TRUE, digits = 15)
-    value <- sub("[.]0+$", "", value)
-    value <- sub("([.][0-9]*[1-9])0+$", "\\1", value)
-    gsub("[.]", "p", value)
+    value <- sprintf("%.17g", as.numeric(q))
+    value <- sub("[.]0+([eE]|$)", "\\1", value)
+    value <- sub("([.][0-9]*[1-9])0+([eE]|$)", "\\1\\2", value)
+    value <- gsub("[.]", "p", value)
+    value <- gsub("[eE][+]", "e", value)
+    value <- gsub("[eE]", "e", value)
+    gsub("-", "m", value)
   }
-  q_label <- function(q) format(q, scientific = FALSE, trim = TRUE, digits = 15)
+  q_label <- function(q) sprintf("%.17g", as.numeric(q))
   hill_orders <- as.numeric(unlist(resolved_config$alpha$hill_orders))
   renyi_orders <- as.numeric(unlist(resolved_config$alpha$renyi_orders))
   tree_path <- resolved_config$input$phylogenetic_tree %||% NULL
@@ -586,7 +589,19 @@ if (identical(manifest$modules$alpha$status, "completed")) {
       evar = if (S > 1L) 1 - (2 / pi) * atan(mean((log(counts) - mean(log(counts)))^2)) else NA_real_,
       mcintosh = if (N > 1L) (N - sqrt(sum(counts^2))) / (N - sqrt(N)) else NA_real_
     )
-    renyi <- function(q) if (q == 1) H else log(sum(p^q)) / (1 - q)
+    renyi <- function(q) {
+      if (q == 1) return(H)
+      epsilon <- q - 1
+      log_p <- log(p)
+      if (abs(epsilon) < 1e-4) {
+        mean_log <- sum(p * log_p)
+        centered <- log_p - mean_log
+        return(-mean_log - epsilon * sum(p * centered^2) / 2 -
+                 epsilon^2 * sum(p * centered^3) / 6)
+      }
+      max_log <- max(log_p)
+      (q / (1 - q)) * max_log + log(sum(exp(q * (log_p - max_log)))) / (1 - q)
+    }
     for (q in renyi_orders) value[[paste0("renyi_q", q_token(q))]] <- renyi(q)
     for (q in hill_orders) value[[paste0("hill_q", q_token(q))]] <- exp(renyi(q))
     if (phylo_enabled) value <- c(value, independent_phylo(counts))

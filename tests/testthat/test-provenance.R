@@ -59,6 +59,33 @@ test_that("pinned Krona renderer assets are included in source provenance", {
   expect_true(all(gsub("\\\\", "/", expected) %in% relative))
 })
 
+test_that("the embedded Sankey client is inventoried and changes the source digest", {
+  repo_root <- normalizePath(file.path("..", ".."), winslash = "/", mustWork = TRUE)
+  client_rel <- "analysis/utils/taxonomy_sankey_client.js"
+  expect_true(source_file_allowed(client_rel))
+  expect_true(file.path(repo_root, client_rel) %in% maintained_source_files(repo_root))
+
+  copied_root <- tempfile("sankey_source_inventory_")
+  dir.create(copied_root)
+  client_path <- file.path(copied_root, client_rel)
+  dir.create(dirname(client_path), recursive = TRUE, showWarnings = FALSE)
+  expect_true(file.copy(file.path(repo_root, client_rel), client_path))
+
+  before <- source_provenance(copied_root)
+  before_paths <- vapply(before$source_files, `[[`, character(1), "path")
+  expect_true(client_rel %in% before_paths)
+  writeLines(c(readLines(client_path, warn = FALSE), "// source digest probe"), client_path)
+  changed <- source_provenance(copied_root)
+  expect_false(identical(before$source_digest_sha256, changed$source_digest_sha256))
+
+  pycache <- file.path(copied_root, "analysis", "utils", "__pycache__")
+  dir.create(pycache, recursive = TRUE)
+  bytecode <- file.path(pycache, "ignored.pyc")
+  writeBin(as.raw(c(0xCA, 0xFE)), bytecode)
+  after_bytecode <- source_provenance(copied_root)
+  expect_identical(changed$source_digest_sha256, after_bytecode$source_digest_sha256)
+})
+
 test_that("lock status reports the full lock closure and active library paths", {
   repo_root <- normalizePath(file.path("..", ".."), winslash = "/", mustWork = TRUE)
   skip_if_not(requireNamespace("renv", quietly = TRUE))

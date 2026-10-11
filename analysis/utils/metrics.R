@@ -48,17 +48,27 @@ validate_alpha_orders <- function(orders, name) {
 }
 
 alpha_q_token <- function(q) {
-  token <- format(q, scientific = FALSE, trim = TRUE, digits = 15)
-  token <- sub("[.]0+$", "", token)
-  token <- sub("([.][0-9]*[1-9])0+$", "\\1", token)
-  gsub("[.]", "p", token)
+  token <- sprintf("%.17g", as.numeric(q))
+  token <- sub("[.]0+([eE]|$)", "\\1", token)
+  token <- sub("([.][0-9]*[1-9])0+([eE]|$)", "\\1\\2", token)
+  token <- gsub("[.]", "p", token)
+  token <- gsub("[eE][+]", "e", token)
+  token <- gsub("[eE]", "e", token)
+  token <- gsub("-", "m", token)
+  token
 }
 
-alpha_q_label <- function(q) format(q, scientific = FALSE, trim = TRUE, digits = 15)
+alpha_q_label <- function(q) sprintf("%.17g", as.numeric(q))
 
 alpha_metric_registry <- function(hill_orders = c(0, 1, 2), renyi_orders = 1) {
   hill_orders <- validate_alpha_orders(hill_orders, "alpha.hill_orders")
   renyi_orders <- validate_alpha_orders(renyi_orders, "alpha.renyi_orders")
+  if (anyDuplicated(vapply(hill_orders, alpha_q_token, character(1)))) {
+    stop("'alpha.hill_orders' contains q values that map to the same metric key.", call. = FALSE)
+  }
+  if (anyDuplicated(vapply(renyi_orders, alpha_q_token, character(1)))) {
+    stop("'alpha.renyi_orders' contains q values that map to the same metric key.", call. = FALSE)
+  }
 
   fixed <- data.frame(
     MetricKey = c(
@@ -169,8 +179,26 @@ safe_vegan_scalar <- function(expr) {
 }
 
 renyi_entropy <- function(probabilities, q) {
-  if (identical(as.numeric(q), 1)) return(-sum(probabilities * log(probabilities)))
-  log(sum(probabilities^q)) / (1 - q)
+  probabilities <- probabilities[is.finite(probabilities) & probabilities > 0]
+  if (!length(probabilities)) return(NA_real_)
+  probabilities <- probabilities / sum(probabilities)
+  q <- as.numeric(q)
+  if (length(q) != 1L || is.na(q) || !is.finite(q) || q < 0) {
+    stop("Renyi order must be one finite non-negative number.", call. = FALSE)
+  }
+  log_probabilities <- log(probabilities)
+  if (q == 1) return(-sum(probabilities * log_probabilities))
+  delta <- q - 1
+  if (abs(delta) < 1e-4) {
+    mean_log <- sum(probabilities * log_probabilities)
+    centered <- log_probabilities - mean_log
+    variance <- sum(probabilities * centered^2)
+    third_cumulant <- sum(probabilities * centered^3)
+    return(-mean_log - delta * variance / 2 - delta^2 * third_cumulant / 6)
+  }
+  max_log <- max(log_probabilities)
+  log_scaled_sum <- log(sum(exp(q * (log_probabilities - max_log))))
+  (q / (1 - q)) * max_log + log_scaled_sum / (1 - q)
 }
 
 calc_alpha_metric_long <- function(counts, hill_orders = c(0, 1, 2), renyi_orders = 1) {
@@ -251,8 +279,35 @@ calc_alpha_indices <- function(counts, hill_orders = c(0, 1, 2), renyi_orders = 
   data.frame(Metric = labels, Value = ordered$Value, stringsAsFactors = FALSE)
 }
 
+vegan_rarefaction_domain <- function(counts) {
+  counts <- validate_alpha_counts(counts)
+  total <- sum(counts)
+  unsupported <- any(counts > .Machine$integer.max) || total > .Machine$integer.max
+  list(
+    available = !unsupported,
+    maximum_count = if (length(counts)) max(counts) else 0,
+    total_count = total,
+    limit = .Machine$integer.max,
+    reason = if (unsupported) sprintf(
+      "vegan rarefaction supports integer-domain counts only (maximum cell %.0f; total %.0f; limit %.0f)",
+      if (length(counts)) max(counts) else 0, total, .Machine$integer.max
+    ) else ""
+  )
+}
+
+abort_rarefaction_domain <- function(operation, support) {
+  condition <- structure(list(
+    message = sprintf("E_RAREFACTION_NUMERIC_DOMAIN: %s unavailable: %s.",
+                      operation, support$reason),
+    call = NULL, operation = operation, support = support
+  ), class = c("wf16s_rarefaction_domain_error", "error", "condition"))
+  stop(condition)
+}
+
 calc_analytical_rarefaction <- function(counts, n_points = 25) {
   counts <- validate_alpha_counts(counts)
+  support <- vegan_rarefaction_domain(counts)
+  if (!support$available) abort_rarefaction_domain("analytical rarefaction", support)
   total_classified <- sum(counts)
 
   if (total_classified < 1) {
@@ -276,6 +331,8 @@ calc_rarefaction_resamples <- function(counts, subsample_depth, n_iterations = 1
                                        seed = 42, hill_orders = c(0, 1, 2),
                                        renyi_orders = 1, phylogeny = NULL) {
   counts <- validate_alpha_counts(counts)
+  support <- vegan_rarefaction_domain(counts)
+  if (!support$available) abort_rarefaction_domain("rarefaction resampling", support)
   if (!is.numeric(subsample_depth) || length(subsample_depth) != 1L ||
       is.na(subsample_depth) || subsample_depth != floor(subsample_depth) ||
       subsample_depth < 1L || subsample_depth > sum(counts)) {

@@ -297,7 +297,7 @@ read_lock_status <- function(repo_root, packages) {
 
 source_file_allowed <- function(path) {
   basename(path) %in% c("VERSION", "renv.lock", ".Rprofile", "activate.R", "settings.json") |
-    grepl("[.](R|r|py|json|ya?ml)$", path, perl = TRUE)
+    grepl("[.](R|r|py|js|json|ya?ml)$", path, perl = TRUE)
 }
 
 source_path_is_symlinked <- function(path, repo_root) {
@@ -438,27 +438,118 @@ run_taxonomy_resolver <- function(python, args, runner = processx::run, echo = F
   )
 }
 
+permutation_rows_within_limit <- function(block_sizes, requested) {
+  block_sizes <- as.numeric(block_sizes)
+  requested <- as.numeric(requested)
+  if (!length(block_sizes) || anyNA(block_sizes) || any(block_sizes < 1) ||
+      length(requested) != 1L || is.na(requested) || requested < 0) return(0)
+  # Index permutations exclude the observed identity. Compare in log space so
+  # factorials cannot overflow on large cohorts.
+  log_arrangements <- sum(lgamma(block_sizes + 1))
+  if (!is.finite(log_arrangements) || log_arrangements > log(requested + 1)) return(requested)
+  max(0, min(requested, round(exp(log_arrangements)) - 1))
+}
+
+estimate_module_workload <- function(sample_count, taxon_count, modules, cfg,
+                                     phylogeny_tip_count = 0L,
+                                     permutation_rows = 0L) {
+  sample_count <- as.numeric(sample_count)
+  taxon_count <- as.numeric(taxon_count)
+  modules <- unique(as.character(modules))
+  beta_requested <- "beta" %in% modules && sample_count >= 2
+  ordination_requested <- "ordination" %in% modules && sample_count >= 2
+  beta_distances <- if (beta_requested) length(cfg$beta$distances %||% c("bray", "jaccard")) else 0
+  ordination_distances <- if (ordination_requested && sample_count >= 3) 1 else 0
+  distance_count <- beta_distances + ordination_distances
+  alpha_iterations <- if ("alpha" %in% modules) as.numeric(cfg$alpha$resample_iterations %||% 100L) else 0
+  beta_iterations <- if (beta_requested && isTRUE(cfg$beta$resampling$enabled)) {
+    as.numeric(cfg$beta$resampling$iterations %||% 0L)
+  } else 0
+  hill_count <- length(cfg$alpha$hill_orders %||% c(0, 1, 2))
+  renyi_count <- length(cfg$alpha$renyi_orders %||% 1)
+  phylo_metrics <- if (phylogeny_tip_count > 0L && "alpha" %in% modules) 3 else 0
+  metric_rows <- max(0, 13 + hill_count + renyi_count + phylo_metrics)
+  values <- c(
+    distance_matrix_cells = sample_count^2 * distance_count,
+    distance_work = sample_count^2 * taxon_count * distance_count,
+    permutation_cells = sample_count * as.numeric(permutation_rows),
+    rarefaction_cells = sample_count * taxon_count * (alpha_iterations + beta_iterations),
+    rarefaction_rows = sample_count * alpha_iterations * metric_rows,
+    phylogenetic_vcv_cells = as.numeric(phylogeny_tip_count)^2
+  )
+  units <- c(
+    distance_matrix_cells = "sample-by-sample matrix cells",
+    distance_work = "sample-pairs multiplied by taxa",
+    permutation_cells = "samples multiplied by admissible permutation rows",
+    rarefaction_cells = "sample-by-taxon cells multiplied by resampling iterations",
+    rarefaction_rows = "long-table metric rows",
+    phylogenetic_vcv_cells = "original-tree covariance matrix cells"
+  )
+  budget_keys <- c(
+    distance_matrix_cells = "max_distance_cells",
+    distance_work = "max_distance_work",
+    permutation_cells = "max_permutation_cells",
+    rarefaction_cells = "max_rarefaction_cells",
+    rarefaction_rows = "max_rarefaction_rows",
+    phylogenetic_vcv_cells = "max_phylogenetic_vcv_cells"
+  )
+  data.frame(
+    Metric = names(values), Value = unname(values), Unit = unname(units[names(values)]),
+    BudgetKey = unname(budget_keys[names(values)]), stringsAsFactors = FALSE
+  )
+}
+
+assert_module_workload <- function(context, modules) {
+  cfg <- context$config
+  samples <- length(context$samples)
+  class_matrix <- context$count_matrix[-context$unclass_index, , drop = FALSE]
+  taxa <- nrow(class_matrix)
+  tip_count <- 0L
+  if ("alpha" %in% modules) {
+    positive_paths <- context$taxonomy$TaxonPath[-context$unclass_index][rowSums(class_matrix) > 0]
+    phylogeny <- prepare_alpha_phylogeny(cfg, positive_paths)
+    if (isTRUE(phylogeny$enabled)) tip_count <- length(phylogeny$tree$tip.label)
+  }
+  permutation_rows <- 0
+  if ("beta" %in% modules && context$mode == "cohort" && samples >= 2L) {
+    groups <- context$metadata$Group
+    group_counts <- table(groups)
+    residual_df <- samples - length(group_counts)
+    strata <- if (!is.null(cfg$beta$strata_column)) context$metadata[[cfg$beta$strata_column]] else NULL
+    design <- assess_group_exchangeability(groups, strata)
+    if (length(group_counts) >= 2L && all(group_counts >= 2L) && residual_df > 0L && design$testable) {
+      block_sizes <- if (is.null(strata)) samples else as.numeric(table(strata))
+      permutation_rows <- permutation_rows_within_limit(block_sizes, cfg$beta$permutations %||% 999L)
+    }
+  }
+  workload <- estimate_module_workload(samples, taxa, modules, cfg, tip_count, permutation_rows)
+  allow_large <- isTRUE(cfg$allow_large_workload) || isTRUE(cfg$cli$allow_large_workload)
+  if (!allow_large) {
+    budgets <- cfg$resource_budgets %||% list()
+    for (index in seq_len(nrow(workload))) {
+      key <- workload$BudgetKey[[index]]
+      default <- switch(key,
+        max_distance_cells = 1e7, max_distance_work = 1e9,
+        max_permutation_cells = 1e7, max_rarefaction_cells = 5e7,
+        max_rarefaction_rows = 1e7, max_phylogenetic_vcv_cells = 1e7
+      )
+      limit <- as.numeric(budgets[[key]] %||% default)
+      if (workload$Value[[index]] > limit) {
+        preflight_error("E_RESOURCE_BUDGET", sprintf(
+          "%s workload %.0f %s exceeds %s %.0f; use --allow-large-workload to override",
+          workload$Metric[[index]], workload$Value[[index]], workload$Unit[[index]], key, limit
+        ))
+      }
+    }
+  }
+  workload
+}
+
 run_module_preflight <- function(context, modules, resolver_runner = NULL) {
   cfg <- context$config
   warnings <- character(0)
   resolver_runner <- resolver_runner %||% context$taxonomy_resolver_runner %||% processx::run
-  if ("alpha" %in% modules) {
-    registry <- alpha_metric_registry(context$config$alpha$hill_orders,
-                                      context$config$alpha$renyi_orders)
-    class_matrix <- context$count_matrix[-context$unclass_index, , drop = FALSE]
-    positive_paths <- context$taxonomy$TaxonPath[-context$unclass_index][rowSums(class_matrix) > 0]
-    phylogeny <- prepare_alpha_phylogeny(context$config, positive_paths)
-    metric_count <- nrow(registry) - if (isTRUE(phylogeny$enabled)) 0L else 3L
-    expected_rows <- as.numeric(length(context$samples)) *
-      as.numeric(context$config$alpha$resample_iterations) *
-      as.numeric(metric_count)
-    maximum_rows <- as.numeric(context$config$resource_budgets$max_rarefaction_rows %||% 1e7)
-    if (expected_rows > maximum_rows && !isTRUE(context$config$cli$allow_large_workload)) {
-      preflight_error("E_RESOURCE_BUDGET", sprintf(
-        "alpha long-table workload %.0f rows exceeds max_rarefaction_rows %.0f; use --allow-large-workload to override",
-        expected_rows, maximum_rows))
-    }
-  }
+  assert_module_workload(context, modules)
   if ("qc" %in% modules && !identical(context$upstream_contract$classifier, "kraken2")) {
     for (sample_id in names(context$assignment_data)) {
       bamstats <- context$bamstats[[sample_id]]

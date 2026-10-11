@@ -173,7 +173,9 @@ validate_config <- function(cfg) {
   }
   if (!is.null(cfg$resource_budgets)) {
     if (!is.list(cfg$resource_budgets)) stop("'resource_budgets' must be a mapping.", call. = FALSE)
-    for (key in c("max_distance_cells", "max_permutation_cells", "max_rarefaction_rows")) {
+    for (key in c("max_distance_cells", "max_distance_work",
+                  "max_permutation_cells", "max_rarefaction_cells",
+                  "max_rarefaction_rows", "max_phylogenetic_vcv_cells")) {
       if (!is.null(cfg$resource_budgets[[key]])) {
         assert_scalar_number(cfg$resource_budgets[[key]], paste0("resource_budgets.", key),
                              lower = 1, integer = TRUE)
@@ -395,7 +397,10 @@ get_default_config <- function() {
     ),
     resource_budgets = list(
       max_distance_cells = 10000000L,
+      max_distance_work = 1000000000L,
       max_permutation_cells = 10000000L,
+      max_rarefaction_cells = 50000000L,
+      max_phylogenetic_vcv_cells = 10000000L,
       max_rarefaction_rows = 10000000L
     ),
     taxonomy = list(

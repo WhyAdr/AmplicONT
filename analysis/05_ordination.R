@@ -15,6 +15,9 @@ nmds_solution_repeated <- function(value) {
 
 run_ordination <- function(context) {
   cfg <- context$config
+  if (exists("assert_module_workload", mode = "function")) {
+    assert_module_workload(context, "ordination")
+  }
   ord_dir <- cfg$output$dirs$ordination
   dir.create(ord_dir, recursive = TRUE, showWarnings = FALSE)
 
