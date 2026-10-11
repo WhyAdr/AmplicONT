@@ -52,6 +52,286 @@ canonicalize_merge_destination <- function(path) {
   file.path(canonicalize_merge_destination(parent), basename(path))
 }
 
+cohort_path_identity <- function(path) {
+  normalized <- gsub("\\\\", "/", path)
+  if (identical(.Platform$OS.type, "windows")) tolower(normalized) else normalized
+}
+
+cohort_transaction_paths <- function(destination, transaction_id = NULL) {
+  canonical <- canonicalize_merge_destination(destination)
+  identity <- cohort_path_identity(canonical)
+  # Keep transaction paths usable with Windows path-length limits. A 96-bit
+  # destination key and 128-bit per-attempt suffix retain ample collision
+  # resistance while avoiding paths that R cannot open after creating them.
+  key <- substr(digest::digest(identity, algo = "sha256", serialize = FALSE), 1L, 24L)
+  journal <- file.path(dirname(canonical), paste0(".wf16s-cohort-", key, ".json"))
+  if (is.null(transaction_id)) return(list(journal = journal, key = key))
+  list(
+    journal = journal, key = key,
+    stage = file.path(dirname(canonical), paste0(".wf16s-cohort-stage-", key, "-", transaction_id)),
+    backup = file.path(dirname(canonical), paste0(".wf16s-cohort-backup-", key, "-", transaction_id))
+  )
+}
+
+new_cohort_transaction_id <- function() {
+  entropy <- paste(Sys.time(), Sys.getpid(), tempfile("cohort_tx_"), sep = "|")
+  paste0("ct-", substr(digest::digest(entropy, algo = "sha256", serialize = FALSE), 1L, 32L))
+}
+
+cohort_directory_snapshot <- function(path) {
+  if (!dir.exists(path)) stop(sprintf("Cohort directory is missing: '%s'.", path), call. = FALSE)
+  children <- list.files(path, all.files = TRUE, no.. = TRUE, full.names = TRUE,
+                        recursive = FALSE, include.dirs = TRUE)
+  if (!length(children)) {
+    entries <- list()
+  } else {
+    is_dir <- dir.exists(children)
+    links <- vapply(children, function(candidate) {
+      link <- tryCatch(Sys.readlink(candidate), error = function(e) "")
+      length(link) == 1L && nzchar(link)
+    }, logical(1))
+    if (any(is_dir) || any(links)) {
+      stop("Cohort bundle contains a directory or symlink entry.", call. = FALSE)
+    }
+    children <- children[order(basename(children), method = "radix")]
+    entries <- lapply(children, function(candidate) {
+      info <- file.info(candidate)
+      if (is.na(info$size) || is.na(info$isdir) || info$isdir) {
+        stop(sprintf("Cohort bundle entry is not a regular file: '%s'.", candidate), call. = FALSE)
+      }
+      list(name = basename(candidate), size_bytes = as.numeric(info$size),
+           sha256 = compute_file_hash(candidate))
+    })
+  }
+  lines <- if (length(entries)) vapply(entries, function(entry) {
+    paste(entry$name, format(entry$size_bytes, scientific = FALSE, trim = TRUE),
+          entry$sha256, sep = "\t")
+  }, character(1)) else character(0)
+  list(entries = entries,
+       sha256 = digest::digest(paste(lines, collapse = "\n"), algo = "sha256", serialize = FALSE))
+}
+
+cohort_snapshots_equal <- function(left, right) {
+  if (is.null(left) || is.null(right) || !is.list(left$entries) || !is.list(right$entries) ||
+      length(left$entries) != length(right$entries)) return(FALSE)
+  canonical <- function(snapshot) {
+    if (!length(snapshot$entries)) return(character(0))
+    vapply(snapshot$entries, function(entry) {
+      paste(as.character(entry$name),
+            format(as.numeric(entry$size_bytes), scientific = FALSE, trim = TRUE),
+            as.character(entry$sha256), sep = "\t")
+    }, character(1))
+  }
+  identical(canonical(left), canonical(right)) && identical(as.character(left$sha256), as.character(right$sha256))
+}
+
+cohort_basename_is_safe <- function(value) {
+  is.character(value) && length(value) == 1L && !is.na(value) && nzchar(value) &&
+    !value %in% c(".", "..") && !startsWith(value, ".") &&
+    !grepl("[/\\\\[:cntrl:]]", value, perl = TRUE) && identical(basename(value), value)
+}
+
+cohort_basenames_are_portably_unique <- function(values) {
+  if (!length(values) || !all(vapply(values, cohort_basename_is_safe, logical(1)))) return(FALSE)
+  !anyDuplicated(tolower(enc2utf8(values)))
+}
+
+validate_cohort_bundle <- function(path) {
+  snapshot <- cohort_directory_snapshot(path)
+  manifest_path <- file.path(path, "cohort_merge_manifest.json")
+  manifest <- tryCatch(jsonlite::fromJSON(manifest_path, simplifyVector = FALSE),
+                       error = function(e) NULL)
+  if (is.null(manifest) || !identical(as.character(manifest$manifest_version), "1.0") ||
+      !is.list(manifest$outputs) || is.null(names(manifest$outputs)) ||
+      !length(manifest$outputs)) {
+    stop("E_COHORT_BUNDLE_INVALID: cohort manifest is missing or malformed.", call. = FALSE)
+  }
+  output_names <- names(manifest$outputs)
+  all_names <- c(output_names, "cohort_merge_manifest.json")
+  if (!cohort_basenames_are_portably_unique(all_names)) {
+    stop("E_COHORT_BUNDLE_INVALID: output names are unsafe or case-colliding.", call. = FALSE)
+  }
+  physical_names <- vapply(snapshot$entries, `[[`, character(1), "name")
+  if (!setequal(tolower(physical_names), tolower(all_names))) {
+    stop("E_COHORT_BUNDLE_INVALID: physical file census differs from the manifest.", call. = FALSE)
+  }
+  for (name in output_names) {
+    record <- manifest$outputs[[name]]
+    actual <- snapshot$entries[[match(name, physical_names)]]
+    if (is.null(record$sha256) || is.null(record$size_bytes) ||
+        !identical(tolower(as.character(record$sha256)), tolower(actual$sha256)) ||
+        !identical(as.numeric(record$size_bytes), as.numeric(actual$size_bytes))) {
+      stop(sprintf("E_COHORT_BUNDLE_INVALID: output fingerprint mismatch for '%s'.", name), call. = FALSE)
+    }
+  }
+  config <- tryCatch(yaml::read_yaml(file.path(path, "config.yml")), error = function(e) NULL)
+  if (is.null(config) || !identical(config$mode, "cohort") || is.null(config$input)) {
+    stop("E_COHORT_BUNDLE_INVALID: generated config.yml is not a parseable cohort config.", call. = FALSE)
+  }
+  required <- c(abundance_table = "abundance_table_species.tsv", metadata = "metadata.tsv",
+                cohort_merge_manifest = "cohort_merge_manifest.json")
+  for (key in names(required)) {
+    if (!identical(as.character(config$input[[key]]), unname(required[[key]])) ||
+        !required[[key]] %in% output_names && key != "cohort_merge_manifest") {
+      stop(sprintf("E_COHORT_BUNDLE_INVALID: config input.%s does not resolve within the bundle.", key),
+           call. = FALSE)
+    }
+  }
+  cache_name <- as.character(config$taxonomy$cache %||% "")
+  if (!cohort_basename_is_safe(cache_name) || !cache_name %in% output_names) {
+    stop("E_COHORT_BUNDLE_INVALID: config taxonomy.cache does not resolve to a bundle output.",
+         call. = FALSE)
+  }
+  list(snapshot = snapshot, manifest = manifest, config = config)
+}
+
+cohort_path_matches_snapshot <- function(path, expected, validate_bundle = FALSE) {
+  if (!dir.exists(path) || is.null(expected)) return(FALSE)
+  actual <- tryCatch({
+    if (validate_bundle) validate_cohort_bundle(path)$snapshot else cohort_directory_snapshot(path)
+  }, error = function(e) NULL)
+  !is.null(actual) && cohort_snapshots_equal(actual, expected)
+}
+
+assert_cohort_transaction_path <- function(candidate, expected, label) {
+  candidate_norm <- canonicalize_merge_destination(candidate)
+  expected_norm <- canonicalize_merge_destination(expected)
+  if (!identical(cohort_path_identity(candidate_norm), cohort_path_identity(expected_norm)) ||
+      !identical(cohort_path_identity(dirname(candidate_norm)),
+                 cohort_path_identity(dirname(canonicalize_merge_destination(expected_norm))))) {
+    stop(sprintf("E_COHORT_RECOVERY_REQUIRED: journal %s escapes its transaction paths.", label),
+         call. = FALSE)
+  }
+  invisible(candidate_norm)
+}
+
+write_cohort_publication_journal <- function(path, journal) {
+  atomic_write_json(journal, path, auto_unbox = TRUE)
+  if (!file.exists(path)) stop("E_COHORT_JOURNAL_WRITE: publication journal was not persisted.", call. = FALSE)
+  invisible(path)
+}
+
+remove_cohort_journal_checked <- function(path) {
+  if (file.exists(path) && (unlink(path, force = TRUE) != 0L || file.exists(path))) {
+    stop(sprintf("E_COHORT_CLEANUP_FAILED: publication journal retained at '%s'.", path), call. = FALSE)
+  }
+  invisible(TRUE)
+}
+
+remove_cohort_directory_checked <- function(path, expected = NULL, allowed_names = NULL) {
+  if (!dir.exists(path)) return(invisible(TRUE))
+  snapshot <- cohort_directory_snapshot(path)
+  if (!is.null(expected) && !cohort_snapshots_equal(snapshot, expected)) {
+    stop(sprintf("E_COHORT_RECOVERY_REQUIRED: refusing to remove changed transaction directory '%s'.", path),
+         call. = FALSE)
+  }
+  if (is.null(expected)) {
+    names <- if (length(snapshot$entries)) vapply(snapshot$entries, `[[`, character(1), "name") else character(0)
+    if (is.null(allowed_names) || any(!names %in% allowed_names)) {
+      stop(sprintf("E_COHORT_RECOVERY_REQUIRED: unexpected files prevent cleanup of '%s'.", path),
+           call. = FALSE)
+    }
+  }
+  if (unlink(path, recursive = TRUE, force = TRUE) != 0L || dir.exists(path)) {
+    stop(sprintf("E_COHORT_CLEANUP_FAILED: could not remove transaction directory '%s'.", path),
+         call. = FALSE)
+  }
+  invisible(TRUE)
+}
+
+recover_cohort_publication <- function(destination) {
+  canonical <- canonicalize_merge_destination(destination)
+  paths <- cohort_transaction_paths(canonical)
+  journal_path <- paths$journal
+  if (!file.exists(journal_path)) return(invisible(FALSE))
+  journal <- tryCatch(jsonlite::fromJSON(journal_path, simplifyVector = FALSE), error = function(e) NULL)
+  if (is.null(journal) || !identical(journal$journal_schema_version, 1L) ||
+      !is.character(journal$transaction_id) || length(journal$transaction_id) != 1L ||
+      !grepl("^ct-[0-9a-f]{32}$", journal$transaction_id) ||
+      !identical(cohort_path_identity(as.character(journal$destination)), cohort_path_identity(canonical)) ||
+      !is.logical(journal$had_prior) || length(journal$had_prior) != 1L || is.na(journal$had_prior) ||
+      !journal$phase %in% c("prepared", "ready_to_publish", "prior_moved", "stage_published") ||
+      !is.list(journal$allowed_stage_basenames)) {
+    stop(sprintf("E_COHORT_RECOVERY_REQUIRED: malformed publication journal at '%s'.", journal_path),
+         call. = FALSE)
+  }
+  expected_paths <- cohort_transaction_paths(canonical, journal$transaction_id)
+  assert_cohort_transaction_path(journal$stage, expected_paths$stage, "stage")
+  assert_cohort_transaction_path(journal$backup, expected_paths$backup, "backup")
+  if (!identical(cohort_path_identity(journal_path), cohort_path_identity(expected_paths$journal))) {
+    stop("E_COHORT_RECOVERY_REQUIRED: journal identity mismatch.", call. = FALSE)
+  }
+  old_snapshot <- journal$prior_snapshot
+  new_snapshot <- journal$expected_new_snapshot
+  final_old <- isTRUE(journal$had_prior) && cohort_path_matches_snapshot(canonical, old_snapshot, TRUE)
+  final_new <- !is.null(new_snapshot) && cohort_path_matches_snapshot(canonical, new_snapshot, TRUE)
+  backup_exists <- dir.exists(journal$backup)
+  backup_old <- isTRUE(journal$had_prior) && backup_exists &&
+    cohort_path_matches_snapshot(journal$backup, old_snapshot, TRUE)
+  stage_exists <- dir.exists(journal$stage)
+  stage_new <- !is.null(new_snapshot) && stage_exists &&
+    cohort_path_matches_snapshot(journal$stage, new_snapshot, TRUE)
+  allowed <- vapply(journal$allowed_stage_basenames, as.character, character(1))
+
+  if (final_new) {
+    if (backup_exists) {
+      if (!backup_old) stop(sprintf(
+        "E_COHORT_RECOVERY_REQUIRED: published bundle is valid but changed backup was retained at '%s'.",
+        journal$backup), call. = FALSE)
+      remove_cohort_directory_checked(journal$backup, expected = old_snapshot)
+    }
+    if (stage_exists) remove_cohort_directory_checked(journal$stage, expected = new_snapshot)
+    remove_cohort_journal_checked(journal_path)
+    return(invisible(TRUE))
+  }
+  if (final_old && !backup_exists) {
+    if (stage_exists) {
+      if (stage_new) remove_cohort_directory_checked(journal$stage, expected = new_snapshot) else
+        remove_cohort_directory_checked(journal$stage, allowed_names = allowed)
+    }
+    remove_cohort_journal_checked(journal_path)
+    return(invisible(TRUE))
+  }
+  if (!dir.exists(canonical) && backup_exists && isTRUE(journal$had_prior)) {
+    if (!backup_old) {
+      if (!file.exists(canonical) && file.rename(journal$backup, canonical)) {
+        stop(sprintf("E_COHORT_RECOVERY_REQUIRED: unexpected backup was restored to '%s'; inspect it before retrying.",
+                     canonical), call. = FALSE)
+      }
+      stop(sprintf("E_COHORT_RECOVERY_REQUIRED: backup differs from its snapshot and remains at '%s'.",
+                   journal$backup), call. = FALSE)
+    }
+    if (!file.rename(journal$backup, canonical) ||
+        !cohort_path_matches_snapshot(canonical, old_snapshot, TRUE)) {
+      stop(sprintf("E_COHORT_RECOVERY_REQUIRED: failed to restore verified backup '%s' to '%s'.",
+                   journal$backup, canonical), call. = FALSE)
+    }
+    if (stage_exists) {
+      if (stage_new) remove_cohort_directory_checked(journal$stage, expected = new_snapshot) else
+        remove_cohort_directory_checked(journal$stage, allowed_names = allowed)
+    }
+    remove_cohort_journal_checked(journal_path)
+    return(invisible(TRUE))
+  }
+  if (!isTRUE(journal$had_prior) && !dir.exists(canonical) && !file.exists(canonical) && stage_new) {
+    if (!file.rename(journal$stage, canonical) ||
+        !cohort_path_matches_snapshot(canonical, new_snapshot, TRUE)) {
+      stop(sprintf("E_COHORT_RECOVERY_REQUIRED: failed to publish verified stage '%s'.", journal$stage),
+           call. = FALSE)
+    }
+    remove_cohort_journal_checked(journal_path)
+    return(invisible(TRUE))
+  }
+  if (!isTRUE(journal$had_prior) && !dir.exists(canonical) && !file.exists(canonical) &&
+      !stage_new && stage_exists && identical(journal$phase, "prepared")) {
+    remove_cohort_directory_checked(journal$stage, allowed_names = allowed)
+    remove_cohort_journal_checked(journal_path)
+    return(invisible(TRUE))
+  }
+  stop(sprintf("E_COHORT_RECOVERY_REQUIRED: ambiguous publication state for '%s'; stage and backup retained.",
+               canonical), call. = FALSE)
+}
+
 locate_producer_output <- function(input_path) {
   if (!dir.exists(input_path)) {
     stop(sprintf("E_COHORT_INPUT_NOT_FOUND: input directory '%s' does not exist.", input_path), call. = FALSE)
@@ -202,7 +482,8 @@ parse_merge_cli_args <- function(args = commandArgs(trailingOnly = TRUE)) {
 
 merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
                                taxonomy_cache = NULL,
-                               validate_only = FALSE, overwrite = FALSE) {
+                               validate_only = FALSE, overwrite = FALSE,
+                               publication_hook = NULL, lock_timeout_ms = 10000) {
   script_dir <- get_merge_script_dir()
   repo_root <- normalizePath(file.path(script_dir, "..", ".."), winslash = "/")
 
@@ -213,7 +494,9 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
   if (!exists("read_upstream_params", mode = "function")) {
     source(file.path(script_dir, "io.R"))
   }
-  if (!exists("compute_file_hash", mode = "function")) {
+  if (!exists("compute_file_hash", mode = "function") ||
+      !exists("acquire_output_lock", mode = "function") ||
+      !exists("atomic_write_json", mode = "function")) {
     source(file.path(script_dir, "atomic_io.R"))
   }
   if (!exists("read_pipeline_version", mode = "function")) {
@@ -259,20 +542,34 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
     }
   }
 
+  destination_lock <- NULL
+  publication_started <- FALSE
+  prior_destination_snapshot <- NULL
+  transaction_journal_path <- cohort_transaction_paths(norm_dest)$journal
+  if (!isTRUE(validate_only)) {
+    destination_lock <- acquire_output_lock(norm_dest, timeout_ms = lock_timeout_ms)
+    on.exit({
+      if (!publication_started) {
+        tryCatch(recover_cohort_publication(norm_dest), error = function(e) {
+          warning(conditionMessage(e), call. = FALSE)
+        })
+      }
+      release_output_lock(destination_lock)
+    }, add = TRUE)
+    recover_cohort_publication(norm_dest)
+  } else if (file.exists(transaction_journal_path)) {
+    stop(sprintf("E_COHORT_RECOVERY_REQUIRED: pending publication journal at '%s'; validate-only cannot mutate it.",
+                 transaction_journal_path), call. = FALSE)
+  }
+
   if (file.exists(norm_dest) && !dir.exists(norm_dest)) stop("E_COHORT_DESTINATION_EXISTS: destination is a file.", call. = FALSE)
   if (dir.exists(norm_dest)) {
     if (!isTRUE(overwrite)) stop("E_COHORT_DESTINATION_EXISTS: destination already exists.", call. = FALSE)
-    ownership_path <- file.path(norm_dest, "cohort_merge_manifest.json")
-    ownership <- tryCatch(jsonlite::fromJSON(ownership_path, simplifyVector = FALSE), error = function(e) NULL)
-    owned <- names(ownership$outputs)
-    existing <- list.files(norm_dest, recursive = TRUE, all.files = TRUE, no.. = TRUE)
-    if (is.null(ownership) || !length(owned) ||
-        any(grepl("[/\\\\]|^[.]|[[:cntrl:]]", owned)) ||
-        !setequal(existing, c(owned, "cohort_merge_manifest.json")) ||
-        any(vapply(owned, function(p) !identical(compute_file_hash(file.path(norm_dest, p)),
-                                               ownership$outputs[[p]]$sha256), logical(1)))) {
+    prior_bundle <- tryCatch(validate_cohort_bundle(norm_dest), error = function(e) NULL)
+    if (is.null(prior_bundle)) {
       stop("E_COHORT_DESTINATION_UNOWNED: overwrite requires an unchanged merger bundle with no unrelated files.", call. = FALSE)
     }
+    prior_destination_snapshot <- prior_bundle$snapshot
   }
   if (!is.null(taxonomy_cache)) {
     if (!file.exists(taxonomy_cache)) stop("E_COHORT_CACHE_MISSING: specified taxonomy cache does not exist.", call. = FALSE)
@@ -482,7 +779,10 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
   } else {
     if (is_its) "taxonomy_cache_its.json" else "taxonomy_cache.json"
   }
-  if (cache_basename %in% c("config.yml", "metadata.tsv", "abundance_table_species.tsv", "cohort_merge_manifest.json")) {
+  reserved_names <- c("config.yml", "metadata.tsv", "abundance_table_species.tsv",
+                      "cohort_merge_manifest.json")
+  if (!cohort_basename_is_safe(cache_basename) ||
+      !cohort_basenames_are_portably_unique(c(reserved_names, cache_basename))) {
     stop("E_COHORT_CACHE_INVALID: cache filename collides with bundle artifacts.", call. = FALSE)
   }
 
@@ -595,28 +895,44 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
     )))
   }
 
-  # 12. Atomic staging and publication
+  # 12. Journaled staging and publication under the destination lock.
   norm_dest <- canonicalize_merge_destination(output_dir)
-  if (dir.exists(norm_dest) && !isTRUE(overwrite)) {
-    stop(sprintf("E_COHORT_DESTINATION_EXISTS: destination directory '%s' already exists; pass --overwrite to replace.",
-                 output_dir), call. = FALSE)
-  }
-
   parent_dir <- dirname(norm_dest)
-  if (!dir.exists(parent_dir)) {
-    dir.create(parent_dir, recursive = TRUE)
+  if (!dir.exists(parent_dir) && !dir.create(parent_dir, recursive = TRUE, showWarnings = FALSE) &&
+      !dir.exists(parent_dir)) {
+    stop(sprintf("E_COHORT_STAGE_FAILED: could not create destination parent '%s'.", parent_dir),
+         call. = FALSE)
   }
-
-  stage_id <- sprintf(".__stage_%s_%s_%05d", basename(norm_dest), format(Sys.time(), "%Y%m%d_%H%M%S"), sample(10000:99999, 1))
-  stage_dir <- file.path(parent_dir, stage_id)
-  dir.create(stage_dir, recursive = TRUE)
-
-  cleanup_needed <- TRUE
-  on.exit({
-    if (cleanup_needed && dir.exists(stage_dir)) {
-      unlink(stage_dir, recursive = TRUE, force = TRUE)
-    }
-  }, add = TRUE)
+  transaction_id <- new_cohort_transaction_id()
+  tx_paths <- cohort_transaction_paths(norm_dest, transaction_id)
+  stage_dir <- tx_paths$stage
+  backup_dir <- tx_paths$backup
+  stage_allowed_names <- c("abundance_table_species.tsv", "metadata.tsv", "config.yml",
+                           cache_basename, "cohort_merge_manifest.json")
+  had_prior <- !is.null(prior_destination_snapshot)
+  if (had_prior && !cohort_path_matches_snapshot(norm_dest, prior_destination_snapshot, TRUE)) {
+    stop("E_COHORT_DESTINATION_CHANGED: destination changed after ownership validation; no files were moved.",
+         call. = FALSE)
+  }
+  if (!had_prior && (dir.exists(norm_dest) || file.exists(norm_dest))) {
+    stop("E_COHORT_DESTINATION_CHANGED: a destination appeared after validation; it was left untouched.",
+         call. = FALSE)
+  }
+  journal <- list(
+    journal_schema_version = 1L, transaction_id = transaction_id,
+    destination = norm_dest, stage = stage_dir,
+    backup = backup_dir, had_prior = had_prior,
+    prior_snapshot = prior_destination_snapshot, expected_new_snapshot = NULL,
+    allowed_stage_basenames = as.list(stage_allowed_names), phase = "prepared"
+  )
+  write_cohort_publication_journal(tx_paths$journal, journal)
+  if (!dir.create(stage_dir, recursive = FALSE, showWarnings = FALSE)) {
+    stop(sprintf("E_COHORT_STAGE_FAILED: could not create transaction stage '%s'.", stage_dir),
+         call. = FALSE)
+  }
+  run_publication_hook <- function(phase) {
+    if (is.function(publication_hook)) publication_hook(phase, norm_dest, stage_dir, backup_dir)
+  }
 
   # Write abundance_table_species.tsv
   out_ab_path <- file.path(stage_dir, "abundance_table_species.tsv")
@@ -640,7 +956,10 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
   # Write or copy taxonomy cache
   out_cache_path <- file.path(stage_dir, cache_basename)
   if (!is.null(taxonomy_cache) && file.exists(taxonomy_cache)) {
-    file.copy(taxonomy_cache, out_cache_path, overwrite = TRUE)
+    copied <- file.copy(taxonomy_cache, out_cache_path, overwrite = FALSE)
+    if (!isTRUE(copied) || !identical(compute_file_hash(out_cache_path), compute_file_hash(taxonomy_cache))) {
+      stop("E_COHORT_CACHE_COPY_FAILED: taxonomy cache was not copied byte-identically.", call. = FALSE)
+    }
   } else {
     writeLines("{}\n", out_cache_path)
   }
@@ -707,29 +1026,76 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
   out_manifest_path <- file.path(stage_dir, "cohort_merge_manifest.json")
   jsonlite::write_json(manifest_data, out_manifest_path, auto_unbox = TRUE, pretty = TRUE)
 
-  # Publish atomically
+  staged_bundle <- tryCatch(validate_cohort_bundle(stage_dir), error = function(e) {
+    stop(sprintf("E_COHORT_STAGE_INVALID: %s", conditionMessage(e)), call. = FALSE)
+  })
+  journal$expected_new_snapshot <- staged_bundle$snapshot
+  journal$phase <- "ready_to_publish"
+  write_cohort_publication_journal(tx_paths$journal, journal)
+  publication_started <- TRUE
   assert_merge_sources()
-  backup_dir <- NULL
-  if (dir.exists(norm_dest)) {
-    backup_id <- sprintf(".__backup_%s_%s_%05d", basename(norm_dest), format(Sys.time(), "%Y%m%d_%H%M%S"), sample(10000:99999, 1))
-    backup_dir <- file.path(parent_dir, backup_id)
+  run_publication_hook("before_prior_rename")
+  if (had_prior) {
+    if (!cohort_path_matches_snapshot(norm_dest, prior_destination_snapshot, TRUE)) {
+      stop("E_COHORT_DESTINATION_CHANGED: destination changed before publication; it was left untouched.",
+           call. = FALSE)
+    }
     if (!file.rename(norm_dest, backup_dir)) {
-      stop(sprintf("E_COHORT_PUBLISH_FAILED: could not stage backup for existing '%s'.", norm_dest), call. = FALSE)
+      stop(sprintf("E_COHORT_PUBLISH_FAILED: could not preserve prior destination at '%s'.", backup_dir),
+           call. = FALSE)
+    }
+    run_publication_hook("after_prior_rename_before_journal")
+    journal$phase <- "prior_moved"
+    write_cohort_publication_journal(tx_paths$journal, journal)
+    run_publication_hook("after_prior_rename")
+    if (!cohort_path_matches_snapshot(backup_dir, prior_destination_snapshot, TRUE)) {
+      if (!dir.exists(norm_dest) && !file.exists(norm_dest) && file.rename(backup_dir, norm_dest)) {
+        stop("E_COHORT_DESTINATION_CHANGED: destination changed at the backup boundary; the changed files were restored and retained.",
+             call. = FALSE)
+      }
+      stop(sprintf("E_COHORT_RECOVERY_REQUIRED: changed prior destination retained at '%s'.", backup_dir),
+           call. = FALSE)
     }
   }
 
+  run_publication_hook("before_stage_rename")
+  if (dir.exists(norm_dest) || file.exists(norm_dest)) {
+    stop("E_COHORT_DESTINATION_CHANGED: a new destination appeared before publish; it was left untouched.",
+         call. = FALSE)
+  }
+  assert_merge_sources()
   if (!file.rename(stage_dir, norm_dest)) {
-    if (!is.null(backup_dir) && dir.exists(backup_dir)) {
-      file.rename(backup_dir, norm_dest)
+    if (had_prior && !dir.exists(norm_dest) && !file.exists(norm_dest) &&
+        cohort_path_matches_snapshot(backup_dir, prior_destination_snapshot, TRUE)) {
+      if (!file.rename(backup_dir, norm_dest) ||
+          !cohort_path_matches_snapshot(norm_dest, prior_destination_snapshot, TRUE)) {
+        stop(sprintf("E_COHORT_RECOVERY_REQUIRED: publication failed and prior bundle could not be verified after restore; backup or destination retained at '%s'.",
+                     if (dir.exists(backup_dir)) backup_dir else norm_dest), call. = FALSE)
+      }
+      recover_cohort_publication(norm_dest)
     }
-    stop(sprintf("E_COHORT_PUBLISH_FAILED: could not publish merged cohort to '%s'.", norm_dest), call. = FALSE)
+    stop(sprintf("E_COHORT_PUBLISH_FAILED: could not publish staged cohort to '%s'.", norm_dest),
+         call. = FALSE)
+  }
+  run_publication_hook("after_stage_rename_before_journal")
+  journal$phase <- "stage_published"
+  write_cohort_publication_journal(tx_paths$journal, journal)
+  run_publication_hook("after_stage_rename")
+  if (!cohort_path_matches_snapshot(norm_dest, staged_bundle$snapshot, TRUE)) {
+    stop(sprintf("E_COHORT_RECOVERY_REQUIRED: published bundle changed; recovery material retained at '%s'.",
+                 if (dir.exists(backup_dir)) backup_dir else norm_dest), call. = FALSE)
   }
 
-  if (!is.null(backup_dir) && dir.exists(backup_dir)) {
-    unlink(backup_dir, recursive = TRUE, force = TRUE)
+  if (had_prior && dir.exists(backup_dir)) {
+    run_publication_hook("before_backup_cleanup")
+    if (!cohort_path_matches_snapshot(backup_dir, prior_destination_snapshot, TRUE)) {
+      stop(sprintf("E_COHORT_RECOVERY_REQUIRED: changed backup was retained at '%s'.", backup_dir),
+           call. = FALSE)
+    }
+    remove_cohort_directory_checked(backup_dir, expected = prior_destination_snapshot)
   }
+  remove_cohort_journal_checked(tx_paths$journal)
 
-  cleanup_needed <- FALSE
   cat(sprintf("[merge_wf16s_cohort] Successfully merged %d samples (%d taxa) into '%s'.\n",
               length(sample_ids), length(all_taxa), norm_dest))
 

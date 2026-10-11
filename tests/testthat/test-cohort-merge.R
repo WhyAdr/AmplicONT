@@ -92,6 +92,29 @@ make_synthetic_sample_bundle <- function(dir, sample_id, taxa_counts, unclass_co
   out_dir
 }
 
+run_cohort_merge_child <- function(repo_root, bundles, output_dir, crash_phase = "",
+                                   lock_timeout_ms = 10000L) {
+  launcher <- tempfile("cohort_merge_child_", fileext = ".R")
+  writeLines(c(
+    "args <- commandArgs(trailingOnly = TRUE)",
+    "source(file.path(args[[1]], 'analysis', 'utils', 'merge_wf16s_cohort.R'))",
+    paste0("merge_wf16s_cohort(args[2:3], args[[4]], overwrite = TRUE, ",
+           "lock_timeout_ms = as.integer(args[[6]]), "),
+    "  publication_hook = function(phase, destination, stage, backup) {",
+    "    if (nzchar(args[[5]]) && identical(phase, args[[5]])) quit(save = 'no', status = 86L)",
+    "  })"
+  ), launcher)
+  child_env <- Sys.getenv()
+  child_env[["R_LIBS_USER"]] <- .libPaths()[1]
+  child_env[["RENV_CONFIG_AUTOLOADER_ENABLED"]] <- "FALSE"
+  processx::run(Sys.which("Rscript"),
+    c(launcher, repo_root, bundles[[1]], bundles[[2]], output_dir,
+      crash_phase, as.character(lock_timeout_ms)),
+    wd = repo_root, env = child_env, timeout = 120000,
+    error_on_status = FALSE, echo = FALSE
+  )
+}
+
 test_that("merge_wf16s_cohort rejects fewer than 2 inputs", {
   expect_error(
     merge_wf16s_cohort(input_dirs = c("dir1"), output_dir = "out"),
@@ -352,4 +375,236 @@ test_that("merger protects unrelated files and honors actual configured length b
   expect_error(merge_wf16s_cohort(c(a,b),out,overwrite=TRUE),"E_COHORT_DESTINATION_UNOWNED")
   expect_equal(readLines(unrelated),"keep")
   expect_null(locate_kraken_report_file(a,"unrelated_sample"))
+})
+
+test_that("portable cache names cannot collide with generated bundle artifacts", {
+  root <- tempfile("cohort_cache_name_identity_")
+  dir.create(root)
+  a <- make_synthetic_sample_bundle(file.path(root, "a"), "A", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+  b <- make_synthetic_sample_bundle(file.path(root, "b"), "B", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
+  reserved_variants <- c("CONFIG.YML", "Metadata.tsv", "ABUNDANCE_TABLE_SPECIES.tsv",
+                         "COHORT_MERGE_MANIFEST.JSON")
+  for (name in reserved_variants) {
+    cache <- file.path(root, name)
+    writeLines("{}", cache)
+    expect_error(
+      merge_wf16s_cohort(c(a, b), file.path(root, paste0("rejected_", name)),
+                         taxonomy_cache = cache),
+      "E_COHORT_CACHE_INVALID"
+    )
+  }
+  cache <- file.path(root, "alternate_taxonomy_cache.json")
+  writeLines('{"fixture":true}', cache)
+  output <- file.path(root, "accepted")
+  expect_identical(merge_wf16s_cohort(c(a, b), output, taxonomy_cache = cache)$status, "merged")
+  expect_identical(compute_file_hash(file.path(output, basename(cache))), compute_file_hash(cache))
+  staged_config <- yaml::read_yaml(file.path(output, "config.yml"))
+  expect_identical(staged_config$taxonomy$cache, basename(cache))
+})
+
+test_that("cohort overwrite detects destination changes at every publication boundary", {
+  repo_root <- normalizePath(file.path("..", ".."), winslash = "/", mustWork = TRUE)
+  scenarios <- c("before_prior_rename", "after_prior_rename", "before_stage_rename",
+                 "after_stage_rename", "before_backup_cleanup")
+  for (phase_to_change in scenarios) {
+    for (mutation in c("add", "remove", "modify")) {
+      root <- tempfile(paste0("cohort_boundary_", phase_to_change, "_", mutation, "_"))
+      dir.create(root)
+      a <- make_synthetic_sample_bundle(file.path(root, "a"), "A", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+      b <- make_synthetic_sample_bundle(file.path(root, "b"), "B", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
+      output <- file.path(root, "merged")
+      merge_wf16s_cohort(c(a, b), output)
+      changed_path <- NULL
+      inject <- function(phase, destination, stage, backup) {
+        if (!identical(phase, phase_to_change)) return(invisible(NULL))
+        target <- if (phase == "after_prior_rename" || phase == "before_backup_cleanup") backup else destination
+        if (phase == "before_stage_rename" && !dir.exists(target)) dir.create(target)
+        if (identical(mutation, "add") || phase == "before_stage_rename") {
+          changed_path <<- file.path(target, "late-user-note.txt")
+          writeLines(paste("preserve", phase), changed_path)
+          if (identical(mutation, "remove")) unlink(changed_path)
+          if (identical(mutation, "modify")) writeLines("modified late note", changed_path)
+        } else {
+          changed_path <<- file.path(target, "abundance_table_species.tsv")
+          if (identical(mutation, "remove")) {
+            unlink(changed_path)
+          } else {
+            writeLines("modified abundance artifact", changed_path)
+          }
+        }
+      }
+      expect_error(
+        merge_wf16s_cohort(c(a, b), output, overwrite = TRUE, publication_hook = inject),
+        "E_COHORT_DESTINATION_CHANGED|E_COHORT_RECOVERY_REQUIRED",
+        info = paste(phase_to_change, mutation)
+      )
+      preserved_path <- if (phase_to_change == "after_prior_rename") {
+        file.path(output, basename(changed_path))
+      } else changed_path
+      expect_identical(file.exists(preserved_path), mutation != "remove",
+                       info = paste(phase_to_change, mutation))
+      if (identical(mutation, "modify")) {
+        expected_content <- if (phase_to_change == "before_stage_rename") {
+          "modified late note"
+        } else "modified abundance artifact"
+        expect_identical(readLines(preserved_path, warn = FALSE), expected_content,
+                         info = paste(phase_to_change, mutation))
+      }
+      if (phase_to_change %in% c("before_prior_rename", "after_prior_rename")) {
+        expect_true(dir.exists(output), info = paste(phase_to_change, mutation))
+      } else if (phase_to_change %in% c("before_stage_rename", "after_stage_rename",
+                                        "before_backup_cleanup")) {
+        sibling_artifacts <- list.files(root, pattern = "^\\.wf16s-cohort-backup-",
+                                        full.names = TRUE, all.files = TRUE)
+        expect_true(length(sibling_artifacts) >= 1L, info = paste(phase_to_change, mutation))
+      }
+    }
+  }
+})
+
+test_that("cohort rollback retains backup when a concurrent destination blocks restoration", {
+  root <- tempfile("cohort_restore_conflict_")
+  dir.create(root)
+  a <- make_synthetic_sample_bundle(file.path(root, "a"), "A", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+  b <- make_synthetic_sample_bundle(file.path(root, "b"), "B", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
+  output <- file.path(root, "merged")
+  merge_wf16s_cohort(c(a, b), output)
+  backup_path <- NULL
+  occupant <- file.path(output, "concurrent-destination.txt")
+  inject <- function(phase, destination, stage, backup) {
+    if (!identical(phase, "after_prior_rename")) return(invisible(NULL))
+    backup_path <<- backup
+    writeLines("late addition", file.path(backup, "late-user-note.txt"))
+    dir.create(destination)
+    writeLines("concurrent occupant", occupant)
+  }
+
+  expect_error(
+    merge_wf16s_cohort(c(a, b), output, overwrite = TRUE, publication_hook = inject),
+    "E_COHORT_RECOVERY_REQUIRED"
+  )
+  expect_true(file.exists(occupant))
+  expect_true(file.exists(file.path(backup_path, "abundance_table_species.tsv")))
+  expect_true(file.exists(file.path(backup_path, "late-user-note.txt")))
+  expect_true(file.exists(cohort_transaction_paths(output)$journal))
+  expect_error(recover_cohort_publication(output), "E_COHORT_RECOVERY_REQUIRED")
+  expect_true(file.exists(occupant))
+  expect_true(file.exists(file.path(backup_path, "late-user-note.txt")))
+})
+
+test_that("a destination lock held by another process prevents cohort publication", {
+  repo_root <- normalizePath(file.path("..", ".."), winslash = "/", mustWork = TRUE)
+  root <- tempfile("cohort_cross_process_lock_")
+  dir.create(root)
+  a <- make_synthetic_sample_bundle(file.path(root, "a"), "A", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+  b <- make_synthetic_sample_bundle(file.path(root, "b"), "B", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
+  output <- file.path(root, "merged")
+  held <- acquire_output_lock(output, timeout_ms = 1000)
+  on.exit(release_output_lock(held), add = TRUE)
+  child <- run_cohort_merge_child(repo_root, c(a, b), output, lock_timeout_ms = 50L)
+  expect_gt(child$status, 0L)
+  expect_match(paste(child$stderr, child$stdout), "E_OUTPUT_BUSY")
+  expect_false(dir.exists(output))
+  expect_false(file.exists(cohort_transaction_paths(output)$journal))
+})
+
+test_that("cohort publication recovers durable states after child-process termination", {
+  repo_root <- normalizePath(file.path("..", ".."), winslash = "/", mustWork = TRUE)
+  root <- tempfile("cohort_crash_recovery_")
+  dir.create(root)
+  a <- make_synthetic_sample_bundle(file.path(root, "a"), "A", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+  b <- make_synthetic_sample_bundle(file.path(root, "b"), "B", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
+  output <- file.path(root, "merged")
+  merge_wf16s_cohort(c(a, b), output)
+
+  before_prior <- run_cohort_merge_child(repo_root, c(a, b), output, "before_prior_rename")
+  expect_equal(before_prior$status, 86L)
+  expect_true(file.exists(cohort_transaction_paths(output)$journal))
+  expect_true(cohort_path_matches_snapshot(output,
+    validate_cohort_bundle(output)$snapshot, validate_bundle = TRUE))
+  expect_identical(merge_wf16s_cohort(c(a, b), output, overwrite = TRUE)$status, "merged")
+  expect_false(file.exists(cohort_transaction_paths(output)$journal))
+
+  after_prior_before_record <- run_cohort_merge_child(
+    repo_root, c(a, b), output, "after_prior_rename_before_journal"
+  )
+  expect_equal(after_prior_before_record$status, 86L)
+  prior_gap_journal <- jsonlite::fromJSON(
+    cohort_transaction_paths(output)$journal, simplifyVector = FALSE
+  )
+  expect_identical(prior_gap_journal$phase, "ready_to_publish")
+  expect_true(cohort_path_matches_snapshot(prior_gap_journal$backup,
+    prior_gap_journal$prior_snapshot, validate_bundle = TRUE))
+  expect_identical(merge_wf16s_cohort(c(a, b), output, overwrite = TRUE)$status, "merged")
+  expect_false(file.exists(cohort_transaction_paths(output)$journal))
+
+  before_stage <- run_cohort_merge_child(repo_root, c(a, b), output, "before_stage_rename")
+  expect_equal(before_stage$status, 86L)
+  expect_false(dir.exists(output))
+  expect_true(file.exists(cohort_transaction_paths(output)$journal))
+  expect_identical(merge_wf16s_cohort(c(a, b), output, overwrite = TRUE)$status, "merged")
+  expect_false(file.exists(cohort_transaction_paths(output)$journal))
+
+  after_prior <- run_cohort_merge_child(repo_root, c(a, b), output, "after_prior_rename")
+  expect_equal(after_prior$status, 86L)
+  expect_false(dir.exists(output))
+  expect_true(file.exists(cohort_transaction_paths(output)$journal))
+  expect_identical(merge_wf16s_cohort(c(a, b), output, overwrite = TRUE)$status, "merged")
+  expect_true(isTRUE(validate_cohort_bundle(output)$manifest$compatibility$status == "compatible"))
+  expect_false(file.exists(cohort_transaction_paths(output)$journal))
+
+  after_publish_before_record <- run_cohort_merge_child(
+    repo_root, c(a, b), output, "after_stage_rename_before_journal"
+  )
+  expect_equal(after_publish_before_record$status, 86L)
+  published_gap_journal <- jsonlite::fromJSON(
+    cohort_transaction_paths(output)$journal, simplifyVector = FALSE
+  )
+  expect_identical(published_gap_journal$phase, "prior_moved")
+  expect_true(cohort_path_matches_snapshot(output,
+    published_gap_journal$expected_new_snapshot, validate_bundle = TRUE))
+  expect_true(cohort_path_matches_snapshot(published_gap_journal$backup,
+    published_gap_journal$prior_snapshot, validate_bundle = TRUE))
+  expect_identical(merge_wf16s_cohort(c(a, b), output, overwrite = TRUE)$status, "merged")
+  expect_false(file.exists(cohort_transaction_paths(output)$journal))
+
+  after_publish <- run_cohort_merge_child(repo_root, c(a, b), output, "after_stage_rename")
+  expect_equal(after_publish$status, 86L)
+  expect_true(dir.exists(output))
+  expect_true(file.exists(cohort_transaction_paths(output)$journal))
+  expect_identical(merge_wf16s_cohort(c(a, b), output, overwrite = TRUE)$status, "merged")
+  expect_true(isTRUE(validate_cohort_bundle(output)$manifest$compatibility$status == "compatible"))
+  expect_false(file.exists(cohort_transaction_paths(output)$journal))
+})
+
+test_that("malformed cohort journals cannot redirect recovery outside transaction paths", {
+  repo_root <- normalizePath(file.path("..", ".."), winslash = "/", mustWork = TRUE)
+  root <- tempfile("cohort_bad_journal_")
+  dir.create(root)
+  a <- make_synthetic_sample_bundle(file.path(root, "a"), "A", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+  b <- make_synthetic_sample_bundle(file.path(root, "b"), "B", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
+  output <- file.path(root, "merged")
+  merge_wf16s_cohort(c(a, b), output)
+  crashed <- run_cohort_merge_child(repo_root, c(a, b), output, "after_prior_rename")
+  expect_equal(crashed$status, 86L)
+  journal_path <- cohort_transaction_paths(output)$journal
+  journal <- jsonlite::fromJSON(journal_path, simplifyVector = FALSE)
+  outside <- file.path(root, "outside")
+  dir.create(outside)
+  sentinel <- file.path(outside, "must-survive.txt")
+  writeLines("preserve", sentinel)
+  journal$stage <- outside
+  jsonlite::write_json(journal, journal_path, auto_unbox = TRUE, pretty = TRUE)
+  expect_error(recover_cohort_publication(output), "E_COHORT_RECOVERY_REQUIRED")
+  expect_true(file.exists(sentinel))
+  expect_false(dir.exists(output))
+})
+
+test_that("cohort transaction paths fit conservative Windows path limits", {
+  root <- tempfile("cohort_transaction_path_length_")
+  dir.create(root)
+  destination <- file.path(root, "merged_cohort_destination")
+  paths <- cohort_transaction_paths(destination, new_cohort_transaction_id())
+  artifact <- file.path(paths$stage, "abundance_table_species.tsv")
+  expect_lt(nchar(artifact), 240L)
 })
