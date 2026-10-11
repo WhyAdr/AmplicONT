@@ -8,8 +8,52 @@ suppressMessages({
   library(ggplot2)
 })
 
+assess_group_exchangeability <- function(groups, strata = NULL) {
+  if (!is.atomic(groups) || length(groups) < 2L || anyNA(groups)) {
+    stop("Groups must contain at least two non-missing labels.", call. = FALSE)
+  }
+  if (!is.null(strata) && (length(strata) != length(groups) || anyNA(strata))) {
+    stop("Permutation strata must align with non-missing group labels.", call. = FALSE)
+  }
+  block <- if (is.null(strata)) rep("all", length(groups)) else as.character(strata)
+  group_labels <- as.character(groups)
+  mixed_blocks <- names(which(vapply(split(group_labels, block), function(x) {
+    length(unique(x)) > 1L
+  }, logical(1))))
+  list(
+    testable = length(mixed_blocks) > 0L,
+    mixed_blocks = mixed_blocks,
+    reason = if (length(mixed_blocks)) "group labels can exchange within the requested strata" else
+      "groups are completely confounded with the requested strata"
+  )
+}
+
+build_group_permutation_design <- function(groups, n_permutations, strata = NULL, seed = 42L) {
+  design <- assess_group_exchangeability(groups, strata)
+  if (!design$testable) {
+    return(c(design, list(matrix = matrix(integer(0), nrow = 0L, ncol = length(groups)))))
+  }
+  control <- permute::how(blocks = if (is.null(strata)) NULL else as.factor(strata))
+  set.seed(seed)
+  permutation_matrix <- permute::shuffleSet(
+    length(groups), nset = n_permutations, control = control
+  )
+  if (is.null(dim(permutation_matrix))) {
+    permutation_matrix <- matrix(permutation_matrix, nrow = 1L)
+  }
+  if (ncol(permutation_matrix) != length(groups) || anyNA(permutation_matrix)) {
+    stop("Permutation design returned a malformed index matrix.", call. = FALSE)
+  }
+  # Label-preserving rows are members of the exchangeability design and must
+  # remain in the inferential null.
+  c(design, list(matrix = permutation_matrix))
+}
+
 run_beta <- function(context, procrustes_fn = vegan::procrustes) {
   cfg <- context$config
+  if (exists("assert_module_workload", mode = "function")) {
+    assert_module_workload(context, "beta")
+  }
   beta_dir <- cfg$output$dirs$beta
   dir.create(beta_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -55,41 +99,53 @@ run_beta <- function(context, procrustes_fn = vegan::procrustes) {
   minimum_count <- cfg$beta$minimum_count %||% 1L
   strata_col <- cfg$beta$strata_column
 
-  n_samples <- length(samples)
-  allow_large <- isTRUE(cfg$allow_large_workload) || isTRUE(cfg$cli$allow_large_workload)
-  budgets <- cfg$resource_budgets %||% list(
-    max_distance_cells = 1e6,
-    max_permutation_cells = 1e7,
-    max_rarefaction_cells = 5e7
-  )
-  if (!allow_large) {
-    if (as.numeric(n_samples) * as.numeric(n_samples) > as.numeric(budgets$max_distance_cells %||% 1e6)) {
-      stop(sprintf("E_RESOURCE_LIMIT_EXCEEDED: Distance matrix workload %d samples (%s cells) exceeds budget. Use --allow-large-workload to override.",
-                   n_samples, format(as.numeric(n_samples) * as.numeric(n_samples), scientific = FALSE)), call. = FALSE)
-    }
-    if (as.numeric(n_samples) * as.numeric(n_perm) > as.numeric(budgets$max_permutation_cells %||% 1e7)) {
-      stop(sprintf("E_RESOURCE_LIMIT_EXCEEDED: Permutation workload %d samples x %d permutations exceeds budget. Use --allow-large-workload to override.",
-                   n_samples, n_perm), call. = FALSE)
-    }
-    if (isTRUE(cfg$beta$resampling$enabled)) {
-      n_taxa <- nrow(otu_table)
-      resamp_iter <- cfg$beta$resampling$iterations %||% 0L
-      if (as.numeric(n_taxa) * as.numeric(resamp_iter) > as.numeric(budgets$max_rarefaction_cells %||% 5e7)) {
-        stop(sprintf("E_RESOURCE_LIMIT_EXCEEDED: Resampling workload %d taxa x %d iterations exceeds budget. Use --allow-large-workload to override.",
-                     n_taxa, resamp_iter), call. = FALSE)
-      }
-    }
-  }
-
   dist_list <- list()
+  unavailable_distances <- character(0)
 
   for (d_name in distances_cfg) {
+    if (d_name == "jaccard") {
+      binary_profiles <- otu_table >= minimum_count
+      empty_samples <- rownames(otu_table)[rowSums(binary_profiles) == 0L]
+      if (length(empty_samples)) {
+        reason <- sprintf(
+          "Jaccard is undefined because thresholding leaves empty profiles: %s",
+          paste(empty_samples, collapse = ", ")
+        )
+        skip_path <- file.path(beta_dir, "distance_jaccard_skipped.tsv")
+        write.table(data.frame(
+          Status = "Skipped", ReasonCode = "E_EMPTY_THRESHOLD_PROFILE",
+          AffectedSamples = jsonlite::toJSON(unname(empty_samples), auto_unbox = TRUE),
+          Reason = reason, stringsAsFactors = FALSE
+        ), skip_path, sep = "\t", row.names = FALSE, quote = FALSE)
+        all_outputs <- c(all_outputs, skip_path)
+        beta_warnings <- unique(c(beta_warnings, paste("E_EMPTY_THRESHOLD_PROFILE:", reason)))
+        unavailable_distances <- c(unavailable_distances, d_name)
+        next
+      }
+    }
     dist_mat <- if (d_name == "bray") {
       vegan::vegdist(rel_otu, method = "bray")
     } else if (d_name == "jaccard") {
       vegan::vegdist(otu_table >= minimum_count, method = "jaccard", binary = TRUE)
     } else {
       stop(sprintf("Unsupported beta-diversity distance: '%s'", d_name), call. = FALSE)
+    }
+    distance_values <- as.vector(dist_mat)
+    if (any(!is.finite(distance_values))) {
+      distance_matrix <- as.matrix(dist_mat)
+      affected <- rownames(distance_matrix)[rowSums(!is.finite(distance_matrix)) > 0L]
+      reason <- sprintf("%s distances contain undefined values for samples: %s",
+                        d_name, paste(affected, collapse = ", "))
+      skip_path <- file.path(beta_dir, sprintf("distance_%s_skipped.tsv", d_name))
+      write.table(data.frame(
+        Status = "Skipped", ReasonCode = "E_NONFINITE_DISTANCE",
+        AffectedSamples = jsonlite::toJSON(unname(affected), auto_unbox = TRUE),
+        Reason = reason, stringsAsFactors = FALSE
+      ), skip_path, sep = "\t", row.names = FALSE, quote = FALSE)
+      all_outputs <- c(all_outputs, skip_path)
+      beta_warnings <- unique(c(beta_warnings, paste("E_NONFINITE_DISTANCE:", reason)))
+      unavailable_distances <- c(unavailable_distances, d_name)
+      next
     }
     dist_list[[d_name]] <- dist_mat
 
@@ -104,7 +160,6 @@ run_beta <- function(context, procrustes_fn = vegan::procrustes) {
     write.table(distance_df, d_tsv, sep = "\t", row.names = FALSE, quote = FALSE)
     all_outputs <- c(all_outputs, d_tsv)
 
-    distance_values <- as.vector(dist_mat)
     if (!any(is.finite(distance_values) & distance_values > 0)) {
       skip_path <- file.path(beta_dir, sprintf("pcoa_skipped_%s.tsv", d_name))
       write.table(data.frame(
@@ -196,8 +251,8 @@ run_beta <- function(context, procrustes_fn = vegan::procrustes) {
     minimum_success_fraction <- cfg$beta$resampling$minimum_success_fraction %||% 0.50
     minimum_successes <- max(1L, ceiling(cfg$beta$resampling$iterations * minimum_success_fraction))
     reference_dist <- dist_list[[primary_name]]
-    reference_values <- as.vector(reference_dist)
-    reference_fit <- tryCatch(
+    reference_values <- if (is.null(reference_dist)) numeric(0) else as.vector(reference_dist)
+    reference_fit <- if (is.null(reference_dist)) NULL else tryCatch(
       stats::cmdscale(reference_dist, k = 2L, eig = TRUE, add = TRUE),
       error = function(e) NULL
     )
@@ -229,9 +284,16 @@ run_beta <- function(context, procrustes_fn = vegan::procrustes) {
           rare_counts <- vegan::rrarefy(otu_table, sample = stability_depth)
           rare_rel <- sweep(rare_counts, 1, rowSums(rare_counts), "/")
           rare_dist <- if (primary_name == "jaccard") {
-            vegan::vegdist(rare_counts >= minimum_count, method = "jaccard", binary = TRUE)
+            rare_binary <- rare_counts >= minimum_count
+            if (any(rowSums(rare_binary) == 0L)) {
+              stop("Rarefaction produced an empty thresholded Jaccard profile.", call. = FALSE)
+            }
+            vegan::vegdist(rare_binary, method = "jaccard", binary = TRUE)
           } else {
             vegan::vegdist(rare_rel, method = primary_name)
+          }
+          if (any(!is.finite(as.vector(rare_dist)))) {
+            stop("Rarefied distance matrix contains undefined values.", call. = FALSE)
           }
           rare_fit <- stats::cmdscale(rare_dist, k = 2L, eig = TRUE, add = TRUE)
           rare_points <- as.matrix(rare_fit$points)
@@ -293,20 +355,17 @@ run_beta <- function(context, procrustes_fn = vegan::procrustes) {
 
   # Gating: At least 2 groups with at least 2 samples per group
   group_counts <- table(meta$Group)
-  primary_values <- as.vector(primary_dist)
+  primary_values <- if (is.null(primary_dist)) numeric(0) else as.vector(primary_dist)
   residual_df <- nrow(meta) - length(group_counts)
   can_run_permanova <- length(group_counts) >= 2 && all(group_counts >= 2) &&
     residual_df > 0 && any(is.finite(primary_values) & primary_values > 0)
 
+  permutation_design <- NULL
   if (can_run_permanova) {
     strata_vec <- if (!is.null(strata_col)) meta[[strata_col]] else NULL
-    set.seed(seed)
-    control <- permute::how(blocks = if (is.null(strata_vec)) NULL else as.factor(strata_vec))
-    permutation_matrix <- permute::shuffleSet(nrow(meta), nset = n_perm, control = control)
-    label_changing <- apply(permutation_matrix, 1L, function(index)
-      !identical(unname(as.character(meta$Group[index])), unname(as.character(meta$Group))))
-    permutation_matrix <- permutation_matrix[label_changing, , drop = FALSE]
-    if (!nrow(permutation_matrix)) {
+    permutation_design <- build_group_permutation_design(meta$Group, n_perm, strata_vec, seed)
+    permutation_matrix <- permutation_design$matrix
+    if (!permutation_design$testable) {
       can_run_permanova <- FALSE
     }
   }
@@ -328,7 +387,7 @@ run_beta <- function(context, procrustes_fn = vegan::procrustes) {
     perm_df$EffectivePermutations <- nrow(permutation_matrix)
     perm_df$StrataColumn <- strata_col %||% NA_character_
     perm_df$BlockSizes <- if (is.null(strata_vec)) NA_character_ else paste(table(strata_vec), collapse = ",")
-    perm_df$DesignStatus <- "admissible_label_changing"
+    perm_df$DesignStatus <- "exchangeable_within_requested_strata"
     perm_df$Warnings <- paste(unique(warning_messages), collapse = " | ")
     perm_df <- perm_df[, c("Term", setdiff(colnames(perm_df), "Term"))]
     beta_warnings <- unique(c(beta_warnings, warning_messages))
@@ -354,7 +413,7 @@ run_beta <- function(context, procrustes_fn = vegan::procrustes) {
       EffectivePermutations = nrow(permutation_matrix),
       StrataColumn = strata_col %||% NA_character_,
       BlockSizes = if (is.null(strata_vec)) NA_character_ else paste(table(strata_vec), collapse = ","),
-      DesignStatus = "admissible_label_changing",
+      DesignStatus = "exchangeable_within_requested_strata",
       StatisticalWarnings = paste(unique(warning_messages), collapse = " | "),
       Warning = if (any(group_counts < 3)) "Sample size < 3 in at least one group; low statistical power" else "None",
       stringsAsFactors = FALSE
@@ -368,9 +427,17 @@ run_beta <- function(context, procrustes_fn = vegan::procrustes) {
       Seed = seed,
       RequestedPermutations = n_perm,
       StrataColumn = strata_col %||% NA_character_,
-      DesignStatus = if (!is.null(permutation_matrix) && is.matrix(permutation_matrix) && nrow(permutation_matrix) == 0L) "no_label_changing_permutation" else "prerequisites_not_met",
-      Reason = sprintf(
-        "PERMANOVA requires non-zero distances, residual degrees of freedom, and at least 2 groups with >= 2 samples each. Found: %s",
+      DesignStatus = if (!is.null(permutation_design) && !permutation_design$testable) {
+        "groups_confounded_with_strata"
+      } else if (primary_name %in% unavailable_distances) {
+        "primary_distance_undefined"
+      } else "prerequisites_not_met",
+      Reason = if (!is.null(permutation_design) && !permutation_design$testable) {
+        sprintf("PERMANOVA and betadisper skipped: %s.", permutation_design$reason)
+      } else if (primary_name %in% unavailable_distances) {
+        sprintf("Primary distance '%s' is undefined; see its distance skip diagnostic.", primary_name)
+      } else sprintf(
+        "PERMANOVA requires a finite non-zero distance matrix, residual degrees of freedom, and at least 2 groups with >= 2 samples each. Found: %s",
         paste(sprintf("%s (n=%d)", names(group_counts), as.integer(group_counts)), collapse = ", ")
       ),
       stringsAsFactors = FALSE
