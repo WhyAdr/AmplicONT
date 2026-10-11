@@ -43,7 +43,8 @@ Repository-level supporting material is grouped by purpose:
 
 - `wf16s-inputs/` contains local producer bundles; only the compact Ambar
   Ayunda regression contract is tracked.
-- `patch/` contains implementation plans and release-audit notes.
+- [`patch/`](patch/README.md) contains implementation plans, review evidence,
+  and release-audit notes, indexed by version.
 - `archived/` contains historical scripts, analyses, and legacy outputs.
 
 ### Analytical Modes & Gating
@@ -288,6 +289,28 @@ the two engines must not be treated as byte-for-byte equivalent.
 ---
 
 ## Kraken Report & Pavian Interoperability
+
+Kraken2 abundance tables contain Bracken species estimates (`E`) plus raw
+unclassified reads (`U`), so their total is `T = E + U`. Raw Kraken assignment
+counts use `N = C + U`; the classified population absent from retained species
+estimates is recorded separately as `D = C - E`. Alpha diversity and taxonomic
+composition use the species estimates. Builtin HTML exports state this basis.
+
+To combine compatible single-sample results, run
+`Rscript analysis/utils/merge_wf16s_cohort.R --input RUN1 --input RUN2 --output-dir COHORT`.
+Each repeated `--input` accepts a literal path, including commas and semicolons.
+The merger validates report and assignment accounting before publication or
+`--validate-only` success. Its generated config references
+`input.cohort_merge_manifest`; the pipeline checks the merged abundance hash,
+original source hashes, and per-sample file mappings, and inventories those
+inputs throughout the run. Metadata and analysis settings remain editable.
+Merger `--overwrite` requires an unchanged merger bundle without unrelated
+files; choose a new destination once analysis outputs have been added.
+
+For local review of uncommitted code, pipeline runs and
+`tests/verify_release_run.R` accept explicit `--allow-dirty`. Verification still
+checks exact source hashes and artifacts; clean release verification remains
+the default.
 
 - Generates standard 6-column `.kreport` files directly from the abundance tree:
   1. Percentage of total reads rooted at this clade

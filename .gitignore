@@ -28,6 +28,10 @@
 # Separate read-only producer example checkout (contains its own .git data).
 /ATW_Sesame_Greenhouse-Examples/
 
+# Local ITS validation bundles (keep original producer data off the remote).
+/wf-16s_Biomecon-ITS-kraken2/
+/wf-16s_Knegative-ITS-kraken2/
+
 # R & Python temporary files
 .Rhistory
 .RData

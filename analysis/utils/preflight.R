@@ -65,6 +65,13 @@ inventory_inputs <- function(cfg, bamstats = NULL) {
   if (!is.null(cfg$input$metadata)) {
     records$metadata <- fingerprint_file(cfg$input$metadata, "input.metadata")
   }
+  if (!is.null(cfg$input$cohort_merge_manifest)) {
+    records$cohort_merge_manifest <- fingerprint_file(cfg$input$cohort_merge_manifest, "input.cohort_merge_manifest")
+    sources <- validate_cohort_merge_input(cfg)
+    records$cohort_sources <- lapply(names(sources), function(s) {
+      c(list(sample_id = s), fingerprint_file(sources[[s]]$path, sprintf("cohort_sources.%s", s)))
+    })
+  }
   if (!is.null(cfg$input$phylogenetic_tree)) {
     records$phylogenetic_tree <- fingerprint_file(
       cfg$input$phylogenetic_tree, "input.phylogenetic_tree")
@@ -140,7 +147,8 @@ assert_inputs_unchanged <- function(inventory, allow_taxonomy_cache_change = FAL
                                      allow_taxonomy_mtime_change = FALSE) {
   flatten <- c(
     inventory[c("config_file", "abundance_table", "params_json", "metadata", "taxonomy_cache",
-                "phylogenetic_tree", "phylogenetic_tip_map")],
+                "phylogenetic_tree", "phylogenetic_tip_map", "cohort_merge_manifest")],
+    inventory$cohort_sources,
     inventory$assignments,
     inventory$kraken2_reports,
     inventory$bracken_reports,
@@ -393,8 +401,16 @@ validate_output_root <- function(cfg, repo_root, extra_paths = character(0)) {
     preflight_error("E_OUTPUT_UNSAFE", sprintf("unsafe output root '%s'", output))
   }
   inputs <- c(cfg$input$abundance_table, cfg$input$metadata, cfg$input$params_json,
+              cfg$input$cohort_merge_manifest,
               cfg$input$phylogenetic_tree, cfg$input$phylogenetic_tip_map,
-              cfg$taxonomy$cache, unlist(cfg$input$assignments, use.names = FALSE), extra_paths)
+              cfg$taxonomy$cache, unlist(cfg$input$assignments, use.names = FALSE),
+              unlist(cfg$input$kraken2_reports, use.names = FALSE),
+              unlist(cfg$input$bracken_reports, use.names = FALSE),
+              unlist(cfg$input$params_by_sample, use.names = FALSE), extra_paths)
+  if (!is.null(cfg$input$cohort_merge_manifest)) {
+    sources <- validate_cohort_merge_input(cfg)
+    inputs <- c(inputs, vapply(sources, `[[`, character(1), "path"))
+  }
   input_paths <- normalizePath(inputs[!is.na(inputs) & nzchar(inputs)], winslash = "/", mustWork = FALSE)
   overlaps <- function(left, right) {
     tolower(left) == tolower(right) ||

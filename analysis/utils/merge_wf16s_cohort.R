@@ -24,9 +24,9 @@ get_merge_script_dir <- function() {
   args <- commandArgs(trailingOnly = FALSE)
   file_arg <- grep("^--file=", args, value = TRUE)
   if (length(file_arg)) {
-    cand <- normalizePath(dirname(sub("^--file=", "", file_arg[1])), winslash = "/")
+    cand <- dirname(sub("^--file=", "", file_arg[1]))
     if (dir.exists(cand) && file.exists(file.path(cand, "classifier_contract.R"))) {
-      return(cand)
+      return(normalizePath(cand, winslash = "/"))
     }
   }
   cur <- normalizePath(getwd(), winslash = "/")
@@ -56,14 +56,10 @@ locate_producer_output <- function(input_path) {
   }
   # 3. Check single nested subdirectory containing output/abundance_table_species.tsv
   subdirs <- list.dirs(norm_path, recursive = FALSE, full.names = TRUE)
-  for (sd in subdirs) {
-    if (file.exists(file.path(sd, "abundance_table_species.tsv"))) {
-      return(normalizePath(sd, winslash = "/"))
-    }
-    if (file.exists(file.path(sd, "output", "abundance_table_species.tsv"))) {
-      return(normalizePath(file.path(sd, "output"), winslash = "/"))
-    }
-  }
+  candidates <- c(subdirs, file.path(subdirs, "output"))
+  candidates <- unique(candidates[file.exists(file.path(candidates, "abundance_table_species.tsv"))])
+  if (length(candidates) == 1L) return(normalizePath(candidates, winslash = "/"))
+  if (length(candidates) > 1L) stop("E_COHORT_INPUT_AMBIGUOUS: multiple producer outputs found.", call. = FALSE)
   stop(sprintf("E_COHORT_INPUT_INVALID: could not locate abundance_table_species.tsv in '%s'.", input_path), call. = FALSE)
 }
 
@@ -78,23 +74,22 @@ locate_params_json <- function(output_dir) {
   stop(sprintf("E_COHORT_INPUT_INVALID: could not locate params.json for output directory '%s'.", output_dir), call. = FALSE)
 }
 
+locate_sample_file <- function(search_dirs, filenames) {
+  candidates <- unique(unlist(lapply(search_dirs, function(d) file.path(d, filenames))))
+  candidates <- candidates[file.exists(candidates)]
+  if (length(candidates) > 1L) stop("E_COHORT_INPUT_AMBIGUOUS: multiple sample files found.", call. = FALSE)
+  if (length(candidates)) normalizePath(candidates, winslash = "/") else NULL
+}
+
 locate_assignments_file <- function(output_dir, sample_id) {
   search_dirs <- c(
     file.path(output_dir, "reads_assignments"),
     file.path(output_dir, "assignments"),
     output_dir
   )
-  for (d in search_dirs) {
-    if (dir.exists(d)) {
-      exact <- file.path(d, sprintf("%s.assignments.tsv", sample_id))
-      if (file.exists(exact)) return(normalizePath(exact, winslash = "/"))
-      cand <- list.files(d, pattern = "\\.assignments\\.tsv$", full.names = TRUE)
-      cand_match <- cand[grepl(sample_id, basename(cand), fixed = TRUE)]
-      if (length(cand_match) == 1L) return(normalizePath(cand_match[1], winslash = "/"))
-      if (length(cand) == 1L) return(normalizePath(cand[1], winslash = "/"))
-    }
-  }
-  NULL
+  names <- paste0(sample_id, c(".assignments.tsv", "_lineages.kraken2.assignments.tsv",
+                              "_lineages.minimap2.assignments.tsv"))
+  locate_sample_file(search_dirs, c(names, paste0(names, ".gz")))
 }
 
 locate_kraken_report_file <- function(output_dir, sample_id) {
@@ -102,15 +97,7 @@ locate_kraken_report_file <- function(output_dir, sample_id) {
     file.path(output_dir, "kraken2"),
     output_dir
   )
-  for (d in search_dirs) {
-    if (dir.exists(d)) {
-      cand <- list.files(d, pattern = "(\\.kraken2\\.report\\.txt|\\.kreport)$", full.names = TRUE)
-      cand_match <- cand[grepl(sample_id, basename(cand), fixed = TRUE)]
-      if (length(cand_match) == 1L) return(normalizePath(cand_match[1], winslash = "/"))
-      if (length(cand) == 1L) return(normalizePath(cand[1], winslash = "/"))
-    }
-  }
-  NULL
+  locate_sample_file(search_dirs, paste0(sample_id, c(".kraken2.report.txt", ".kreport")))
 }
 
 locate_bracken_report_file <- function(output_dir, sample_id) {
@@ -118,16 +105,7 @@ locate_bracken_report_file <- function(output_dir, sample_id) {
     file.path(output_dir, "bracken"),
     output_dir
   )
-  for (d in search_dirs) {
-    if (dir.exists(d)) {
-      cand <- list.files(d, pattern = "(\\.*bracken.*\\.report|\\.bracken\\.report|\\.report)$", full.names = TRUE)
-      cand <- cand[!grepl("\\.kraken2\\.report\\.txt$", cand)]
-      cand_match <- cand[grepl(sample_id, basename(cand), fixed = TRUE)]
-      if (length(cand_match) == 1L) return(normalizePath(cand_match[1], winslash = "/"))
-      if (length(cand) == 1L) return(normalizePath(cand[1], winslash = "/"))
-    }
-  }
-  NULL
+  locate_sample_file(search_dirs, paste0(sample_id, c(".kraken2_bracken.report", ".bracken.report")))
 }
 
 parse_merge_cli_args <- function(args = commandArgs(trailingOnly = TRUE)) {
@@ -144,11 +122,11 @@ parse_merge_cli_args <- function(args = commandArgs(trailingOnly = TRUE)) {
     if (arg %in% c("-i", "--input", "--inputs")) {
       if (i + 1L > length(args)) stop(sprintf("Option '%s' requires an argument.", arg), call. = FALSE)
       val <- args[i + 1L]
-      inputs <- c(inputs, strsplit(val, "[,;]")[[1]])
+      inputs <- c(inputs, if (arg == "--inputs") strsplit(val, "[,;]")[[1]] else val)
       i <- i + 2L
     } else if (startsWith(arg, "--input=")) {
       val <- sub("^--input=", "", arg)
-      inputs <- c(inputs, strsplit(val, "[,;]")[[1]])
+      inputs <- c(inputs, val)
       i <- i + 1L
     } else if (startsWith(arg, "--inputs=")) {
       val <- sub("^--inputs=", "", arg)
@@ -184,7 +162,8 @@ parse_merge_cli_args <- function(args = commandArgs(trailingOnly = TRUE)) {
     } else if (arg %in% c("-h", "--help")) {
       cat("Usage: Rscript merge_wf16s_cohort.R --input <dir1> --input <dir2> --output-dir <out> [options]\n")
       cat("Options:\n")
-      cat("  -i, --input <dir>        Input wf-16s run output directory (repeatable or comma-separated)\n")
+      cat("  -i, --input <dir>        Input wf-16s run output directory (repeatable, literal path)\n")
+      cat("  --inputs <dirs>          Comma/semicolon-separated inputs; use --input for paths containing these characters\n")
       cat("  -o, --output-dir <dir>   Destination directory for merged cohort bundle\n")
       cat("  -p, --project-name <str> Combined cohort project name\n")
       cat("  --validate-only          Perform compatibility and join validation without writing outputs\n")
@@ -253,18 +232,51 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
     resolved_roots[idx] <- locate_producer_output(input_dirs[idx])
   }
 
-  if (anyDuplicated(resolved_roots) > 0L) {
+  if (anyDuplicated(tolower(resolved_roots)) > 0L) {
     stop("E_COHORT_DUPLICATE_SOURCE: duplicate input path provided.", call. = FALSE)
   }
 
   # 2. Guard against output directory overlap
   norm_dest <- normalizePath(output_dir, winslash = "/", mustWork = FALSE)
-  for (r_root in resolved_roots) {
-    if (identical(norm_dest, r_root) ||
-        startsWith(norm_dest, paste0(r_root, "/")) ||
-        startsWith(r_root, paste0(norm_dest, "/"))) {
+  for (r_root in unique(c(resolved_roots, normalizePath(input_dirs, winslash = "/")))) {
+    if (identical(tolower(norm_dest), tolower(r_root)) ||
+        startsWith(tolower(norm_dest), paste0(tolower(r_root), "/")) ||
+        startsWith(tolower(r_root), paste0(tolower(norm_dest), "/"))) {
       stop(sprintf("E_COHORT_OUTPUT_OVERLAP: output directory '%s' overlaps with input directory '%s'.",
                    output_dir, r_root), call. = FALSE)
+    }
+  }
+
+  if (file.exists(norm_dest) && !dir.exists(norm_dest)) stop("E_COHORT_DESTINATION_EXISTS: destination is a file.", call. = FALSE)
+  if (dir.exists(norm_dest)) {
+    if (!isTRUE(overwrite)) stop("E_COHORT_DESTINATION_EXISTS: destination already exists.", call. = FALSE)
+    ownership_path <- file.path(norm_dest, "cohort_merge_manifest.json")
+    ownership <- tryCatch(jsonlite::fromJSON(ownership_path, simplifyVector = FALSE), error = function(e) NULL)
+    owned <- names(ownership$outputs)
+    existing <- list.files(norm_dest, recursive = TRUE, all.files = TRUE, no.. = TRUE)
+    if (is.null(ownership) || !length(owned) ||
+        any(grepl("[/\\\\]|^[.]|[[:cntrl:]]", owned)) ||
+        !setequal(existing, c(owned, "cohort_merge_manifest.json")) ||
+        any(vapply(owned, function(p) !identical(compute_file_hash(file.path(norm_dest, p)),
+                                               ownership$outputs[[p]]$sha256), logical(1)))) {
+      stop("E_COHORT_DESTINATION_UNOWNED: overwrite requires an unchanged merger bundle with no unrelated files.", call. = FALSE)
+    }
+  }
+  if (!is.null(taxonomy_cache)) {
+    if (!file.exists(taxonomy_cache)) stop("E_COHORT_CACHE_MISSING: specified taxonomy cache does not exist.", call. = FALSE)
+    if (startsWith(tolower(normalizePath(taxonomy_cache, winslash = "/")), paste0(tolower(norm_dest), "/"))) {
+      stop("E_COHORT_OUTPUT_OVERLAP: taxonomy cache is inside destination.", call. = FALSE)
+    }
+  }
+  identity_cache <- if (is.null(taxonomy_cache)) list() else jsonlite::fromJSON(taxonomy_cache, simplifyVector = FALSE)
+  source_paths <- unique(c(unlist(lapply(resolved_roots, function(p) {
+    list.files(p, pattern = "(params[.]json|abundance_table_species[.]tsv|assignments[.]tsv([.]gz)?|[.]report([.]txt)?|[.]kreport)$",
+               full.names = TRUE, recursive = TRUE)
+  })), taxonomy_cache, vapply(resolved_roots, locate_params_json, character(1))))
+  source_hashes <- vapply(source_paths, compute_file_hash, character(1))
+  assert_merge_sources <- function() {
+    if (!identical(vapply(source_paths, compute_file_hash, character(1)), source_hashes)) {
+      stop("E_COHORT_INPUT_CHANGED: source changed during merge.", call. = FALSE)
     }
   }
 
@@ -292,6 +304,7 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
     dup <- sample_ids[duplicated(sample_ids)][1]
     stop(sprintf("E_COHORT_DUPLICATE_SAMPLE: duplicate sample ID detected: '%s'.", dup), call. = FALSE)
   }
+  validate_sample_ids(sample_ids)
 
   rep_id <- sample_ids[1]
   rep_params <- params_list[[rep_id]]
@@ -327,17 +340,17 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
     ab_path <- file.path(r_root, "abundance_table_species.tsv")
     abundance_paths[idx] <- normalizePath(ab_path, winslash = "/", mustWork = TRUE)
 
+    validated <- read_abundance_table(ab_path)
+    if (!identical(validated$samples, s_id)) {
+      stop(sprintf("E_COHORT_MALFORMED_TABLE: expected only sample '%s' in '%s'.", s_id, ab_path), call. = FALSE)
+    }
     df <- utils::read.delim(ab_path, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE)
     if (!"tax" %in% names(df) || !"total" %in% names(df)) {
       stop(sprintf("E_COHORT_MALFORMED_TABLE: abundance table '%s' missing 'tax' or 'total' column.", ab_path), call. = FALSE)
     }
     non_meta <- setdiff(names(df), c("tax", "total"))
     if (!s_id %in% non_meta) {
-      if (length(non_meta) == 1L) {
-        names(df)[names(df) == non_meta[1]] <- s_id
-      } else {
-        stop(sprintf("E_COHORT_MALFORMED_TABLE: sample '%s' column not found in '%s'.", s_id, ab_path), call. = FALSE)
-      }
+      stop(sprintf("E_COHORT_MALFORMED_TABLE: sample '%s' column not found in '%s'.", s_id, ab_path), call. = FALSE)
     }
     if (nrow(df) == 0L || !startsWith(df$tax[1], "Unclassified")) {
       stop(sprintf("E_COHORT_MALFORMED_TABLE: row 1 in '%s' must be Unclassified.", ab_path), call. = FALSE)
@@ -377,6 +390,27 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
     }
   }
 
+  # Use the same ingestion and accounting contracts as the pipeline before
+  # claiming validate-only success or publishing a bundle.
+  sample_accounting <- list()
+  for (idx in seq_along(sample_ids)) {
+    s_id <- sample_ids[idx]
+    ab <- read_abundance_table(abundance_paths[idx])
+    u <- ab$count_matrix[ab$unclass_index, s_id]
+    e <- sum(ab$count_matrix[-ab$unclass_index, s_id])
+    assignments <- if (is.null(assignments_map[[s_id]])) NULL else read_assignments_file(
+      assignments_map[[s_id]], s_id, classifier = rep_contract$classifier,
+      expected_total = if (is_kraken) NULL else u + e,
+      expected_classified = if (is_kraken) NULL else e, expected_unclassified = u)
+    if (is_kraken) {
+      kr <- parse_kraken_report(kraken_reports_map[[s_id]], s_id)
+      br <- parse_bracken_abundance(bracken_reports_map[[s_id]], s_id)
+      match_bracken_to_abundance(br, ab$count_matrix, ab$taxonomy, assignments_df = assignments,
+                                 sample_id = s_id, taxonomy_cache = identity_cache)
+      sample_accounting[[s_id]] <- compute_kraken_sample_accounting(kr, br, u, e, assignments, s_id)
+    }
+  }
+
   # 7. Perform outer join across full tax paths
   unclass_tax <- abundance_dfs[[1]]$tax[1]
   classified_taxa <- unique(unlist(lapply(abundance_dfs, function(df) df$tax[-1])))
@@ -397,6 +431,9 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
   }
 
   row_totals <- rowSums(merged_counts)
+  if (any(!is.finite(row_totals) | row_totals > 9007199254740991)) {
+    stop("E_COHORT_COUNT_OVERFLOW: merged aggregate exceeds max safe integer.", call. = FALSE)
+  }
 
   # Format abundance table data frame
   merged_df <- data.frame(
@@ -426,12 +463,15 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
   # Determine ITS bounds and cache naming
   db_name <- tolower(rep_contract$database_set %||% "")
   is_its <- grepl("its", db_name)
-  qc_min_len <- as.integer(rep_contract$preprocessing$min_len %||% (if (is_its) 250L else 1200L))
-  qc_max_len <- as.integer(rep_contract$preprocessing$max_len %||% (if (is_its) 1000L else 1800L))
+  qc_min_len <- as.integer(rep_contract$min_len)
+  qc_max_len <- as.integer(rep_contract$max_len)
   cache_basename <- if (!is.null(taxonomy_cache) && nzchar(trimws(taxonomy_cache))) {
     basename(taxonomy_cache)
   } else {
     if (is_its) "taxonomy_cache_its.json" else "taxonomy_cache.json"
+  }
+  if (cache_basename %in% c("config.yml", "metadata.tsv", "abundance_table_species.tsv", "cohort_merge_manifest.json")) {
+    stop("E_COHORT_CACHE_INVALID: cache filename collides with bundle artifacts.", call. = FALSE)
   }
 
   # 10. Build cohort config
@@ -442,6 +482,7 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
     seed = 42L,
     input = list(
       abundance_table = "abundance_table_species.tsv",
+      cohort_merge_manifest = "cohort_merge_manifest.json",
       metadata = "metadata.tsv",
       params_json = params_paths[1],
       params_by_sample = params_by_sample_map,
@@ -529,6 +570,7 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
   )
 
   # 11. If validate_only, return validation summary without touching disk
+  assert_merge_sources()
   if (isTRUE(validate_only)) {
     cat(sprintf("[merge_wf16s_cohort] Validation successful: %d samples, %d unique taxa joined.\n",
                 length(sample_ids), length(all_taxa)))
@@ -641,11 +683,11 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
       classifier = rep_contract$classifier,
       database_set = rep_contract$database_set,
       taxonomic_rank = rep_contract$taxonomic_rank,
-      preprocessing = rep_contract$preprocessing,
-      classifier_settings = rep_contract$classifier_settings,
+      upstream_contract = rep_contract,
       status = "compatible"
     ),
     samples = sample_ids,
+    sample_accounting = sample_accounting,
     total_taxa = length(all_taxa),
     sources = unname(sources_records),
     outputs = output_records
@@ -654,6 +696,7 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
   jsonlite::write_json(manifest_data, out_manifest_path, auto_unbox = TRUE, pretty = TRUE)
 
   # Publish atomically
+  assert_merge_sources()
   backup_dir <- NULL
   if (dir.exists(norm_dest)) {
     backup_id <- sprintf(".__backup_%s_%s_%05d", basename(norm_dest), format(Sys.time(), "%Y%m%d_%H%M%S"), sample(10000:99999, 1))

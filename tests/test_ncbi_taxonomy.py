@@ -874,6 +874,16 @@ class TaxonomyResolverTests(unittest.TestCase):
         norm_key = "Fungi|Ascomycota|Saccharomycetes|Saccharomycetales|Dipodascales_Incertae_sedis|Candida|Candida tunisiensis"
         self.assertEqual(tmap.get(norm_key), 1183333)
 
+    def test_kraken2_hit_integers_and_trailing_rank_fail_closed(self):
+        bad_file = self.work / "bad_kraken_bounds.tsv"
+        for hits in ("9007199254740992:1", "4932:9007199254740992", "4932:01"):
+            bad_file.write_text(f"C\tr1\t4932\t500\t{hits}\tA|B|C|D|E|F|G\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                taxonomy.read_assignment_taxids([str(bad_file)], classifier="kraken2")
+        bad_file.write_text("C\tr1\t4932\t500\t4932:1\tA|B|C|D|E|F|G|\n", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            taxonomy.read_assignment_taxids([str(bad_file)], classifier="kraken2")
+
     def test_placeholder_nodes_skipped_in_remote_lookup(self):
         item = {
             "path": "Fungi;Ascomycota;Saccharomycetes;Saccharomycetales;Dipodascales_Incertae_sedis",

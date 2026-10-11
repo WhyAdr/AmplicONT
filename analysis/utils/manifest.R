@@ -569,6 +569,20 @@ validate_manifest_v2_revision_core <- function(manifest, physical_root = NULL,
     }
     assert_manifest_scalar(uc$database_set, "upstream_contract.database_set", "character")
     assert_manifest_scalar(uc$taxonomic_rank, "upstream_contract.taxonomic_rank", "character")
+    if (!uc$database_set %in% c("ncbi_16s_18s", "ncbi_16s_18s_28s_ITS") || uc$taxonomic_rank != "S") {
+      manifest_fail("upstream_contract", "expected supported NCBI database and species rank.")
+    }
+    if (!is.null(manifest$inputs$cohort_merge_manifest)) {
+      validate_manifest_fingerprint(manifest$inputs$cohort_merge_manifest, "inputs.cohort_merge_manifest")
+      validate_manifest_input_collection(manifest$inputs$cohort_sources, "inputs.cohort_sources")
+      source_samples <- vapply(manifest$inputs$cohort_sources, `[[`, character(1), "sample_id")
+      if (!setequal(source_samples, samples)) manifest_fail("inputs.cohort_sources", "must cover samples.")
+    }
+    if (!is.null(manifest$inputs$params_by_sample)) {
+      validate_manifest_input_collection(manifest$inputs$params_by_sample, "inputs.params_by_sample")
+      p_samples <- vapply(manifest$inputs$params_by_sample, `[[`, character(1), "sample_id")
+      if (!setequal(p_samples, samples)) manifest_fail("inputs.params_by_sample", "must cover all samples.")
+    }
 
     if (identical(uc$classifier, "kraken2")) {
       if (!identical(manifest$count_basis, "bracken_species_estimates")) {
@@ -580,13 +594,21 @@ validate_manifest_v2_revision_core <- function(manifest, physical_root = NULL,
       if (!identical(uc$identity_coverage_active, FALSE)) {
         manifest_fail("upstream_contract.identity_coverage_active", "expected FALSE for kraken2.")
       }
-      if (is.null(uc$kraken2_confidence) || !is.numeric(uc$kraken2_confidence) ||
+      if (!is.numeric(uc$kraken2_confidence) || length(uc$kraken2_confidence) != 1L ||
+          !is.finite(uc$kraken2_confidence) ||
           uc$kraken2_confidence < 0 || uc$kraken2_confidence > 1) {
         manifest_fail("upstream_contract.kraken2_confidence", "expected finite number in [0, 1].")
       }
-      if (is.null(uc$bracken_threshold) || !is.numeric(uc$bracken_threshold) ||
+      if (!is.numeric(uc$bracken_threshold) || length(uc$bracken_threshold) != 1L ||
+          !is.finite(uc$bracken_threshold) || uc$bracken_threshold > 9007199254740991 ||
           uc$bracken_threshold < 0 || uc$bracken_threshold != floor(uc$bracken_threshold)) {
         manifest_fail("upstream_contract.bracken_threshold", "expected nonnegative integer.")
+      }
+      if (!is.null(uc$bracken_length) && (!is.numeric(uc$bracken_length) ||
+          length(uc$bracken_length) != 1L || !is.finite(uc$bracken_length) ||
+          uc$bracken_length <= 0 || uc$bracken_length > 2147483647 ||
+          uc$bracken_length != floor(uc$bracken_length))) {
+        manifest_fail("upstream_contract.bracken_length", "expected positive integer or null.")
       }
 
       if (is.null(manifest$inputs$kraken2_reports)) {
@@ -607,28 +629,26 @@ validate_manifest_v2_revision_core <- function(manifest, physical_root = NULL,
         manifest_fail("inputs.bracken_reports", "must cover all samples.")
       }
 
-      if (!is.null(manifest$inputs$params_by_sample)) {
-        validate_manifest_input_collection(manifest$inputs$params_by_sample, "inputs.params_by_sample")
-        p_samples <- vapply(manifest$inputs$params_by_sample %||% list(), function(x) as.character(x$sample_id), character(1))
-        if (!setequal(p_samples, samples)) {
-          manifest_fail("inputs.params_by_sample", "must cover all samples.")
-        }
-      }
-
       if (!is.list(manifest$population_accounting) || is.null(names(manifest$population_accounting))) {
         manifest_fail("population_accounting", "expected an object.")
       }
       pa <- manifest$population_accounting
-      if (!setequal(names(pa), samples)) {
+      if (anyDuplicated(names(pa)) || !setequal(names(pa), samples)) {
         manifest_fail("population_accounting", "must contain an entry for each sample.")
       }
       for (s in samples) {
         sa <- pa[[s]]
         if (!is.list(sa)) manifest_fail(paste0("population_accounting.", s), "expected an object.")
+        assert_manifest_scalar(sa$assignments_checked, paste0("population_accounting.", s, ".assignments_checked"), "logical")
+        assert_manifest_scalar(sa$reconciliation_pass, paste0("population_accounting.", s, ".reconciliation_pass"), "logical")
+        if (!isTRUE(sa$reconciliation_pass) ||
+            !identical(sa$assignments_checked, s %in% assignment_samples)) {
+          manifest_fail("population_accounting", "reconciliation and assignment availability flags disagree.")
+        }
         for (f in c("N", "C", "U", "E", "T", "D")) {
           val <- sa[[f]]
           if (!is.numeric(val) || length(val) != 1L || is.na(val) || !is.finite(val) ||
-              val < 0 || val != floor(val)) {
+              val < 0 || val > 9007199254740991 || val != floor(val)) {
             manifest_fail(paste0("population_accounting.", s, ".", f), "expected nonnegative safe integer.")
           }
         }

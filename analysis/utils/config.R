@@ -69,7 +69,7 @@ validate_config <- function(cfg) {
   assert_nonempty_string(cfg$input$abundance_table, "input.abundance_table")
   assert_nonempty_string(cfg$input$params_json, "input.params_json")
   assert_nonempty_string(cfg$input$tax_column, "input.tax_column")
-  for (key in c("phylogenetic_tree", "phylogenetic_tip_map")) {
+  for (key in c("phylogenetic_tree", "phylogenetic_tip_map", "cohort_merge_manifest")) {
     if (!is.null(cfg$input[[key]])) {
       assert_nonempty_string(cfg$input[[key]], paste0("input.", key))
     }
@@ -315,6 +315,7 @@ get_default_config <- function() {
       abundance_table = "wf16s-inputs/output_AAy/abundance_table_species.tsv",
       metadata = NULL,
       params_json = "wf16s-inputs/output_AAy/params.json",
+      cohort_merge_manifest = NULL,
       wf16s_output_root = NULL,
       tax_column = "tax",
       aggregate_columns = c("total"),
@@ -542,6 +543,7 @@ load_config <- function(config_path = "config.yml", cli_opts = list()) {
   cfg$input$wf16s_output_root <- resolve_path(cfg$input$wf16s_output_root, config_dir)
   cfg$input$phylogenetic_tree <- resolve_path(cfg$input$phylogenetic_tree, config_dir)
   cfg$input$phylogenetic_tip_map <- resolve_path(cfg$input$phylogenetic_tip_map, config_dir)
+  cfg$input$cohort_merge_manifest <- resolve_path(cfg$input$cohort_merge_manifest, config_dir)
 
   for (mapping_key in c("assignments", "kraken2_reports", "bracken_reports", "params_by_sample")) {
     if (!is.null(cfg$input[[mapping_key]]) && is.list(cfg$input[[mapping_key]])) {

@@ -55,23 +55,38 @@ make_synthetic_sample_bundle <- function(dir, sample_id, taxa_counts, unclass_co
   jsonlite::write_json(params_data, file.path(out_dir, "params.json"),
                        auto_unbox = TRUE, pretty = TRUE, null = "null")
 
-  # 3. assignments
+  # Real producer-shaped fixtures: assignments, raw report and estimates agree.
   assign_dir <- file.path(out_dir, "reads_assignments")
   dir.create(assign_dir, recursive = TRUE, showWarnings = FALSE)
-  assign_file <- file.path(assign_dir, sprintf("%s.assignments.tsv", sample_id))
-  writeLines(c("read_id\tstatus\ttaxid", sprintf("r1\tC\t123")), assign_file)
-
-  # 4. reports if kraken2
+  tids <- as.character(100L + match(sub(".*;", "", taxa), c("TaxonA", "TaxonB", "TaxonC")))
+  lineage <- vapply(strsplit(taxa, ";", fixed = TRUE), function(x) paste(x[c(1L, 3L:8L)], collapse = "|"), character(1))
+  assignment_rows <- character(0)
+  for (i in seq_along(taxa)) {
+    for (j in seq_len(taxa_counts[i])) {
+      assignment_rows <- c(assignment_rows, if (classifier == "kraken2")
+        paste("C", paste0("r", length(assignment_rows)+1), tids[i], "500", paste0(tids[i], ":1"), lineage[i], sep="\t") else
+        paste("C", paste0("r", length(assignment_rows)+1), tids[i], "500", lineage[i], sep="\t"))
+    }
+  }
+  for (j in seq_len(unclass_count)) assignment_rows <- c(assignment_rows, if (classifier == "kraken2")
+    paste("U", paste0("u", j), "0", "500", "0:1", "", sep="\t") else
+    paste("U", paste0("u", j), "0", "500", "", sep="\t"))
+  writeLines(assignment_rows, file.path(assign_dir, sprintf("%s.assignments.tsv", sample_id)))
   if (classifier == "kraken2") {
+    total <- sum(all_counts)
+    classified <- sum(taxa_counts)
+    report_row <- function(n, direct, rank, tid, name) paste(sprintf("%.2f", 100*n/total), n, direct, rank, tid, name, sep="\t")
+    rows <- c(report_row(unclass_count, unclass_count, "U", "0", "unclassified"),
+              report_row(classified, 0, "R", "1", "root"))
+    for (i in seq_along(taxa)) rows <- c(rows, report_row(taxa_counts[i], taxa_counts[i], "S", tids[i], paste0("  ", sub(".*;", "", taxa[i]))))
     k_dir <- file.path(out_dir, "kraken2")
-    dir.create(k_dir, recursive = TRUE, showWarnings = FALSE)
-    writeLines(c(" 100.00\t10\t10\tU\t0\tunclassified"),
-               file.path(k_dir, sprintf("%s.kraken2.report.txt", sample_id)))
-
+    dir.create(k_dir, recursive = TRUE)
+    writeLines(rows, file.path(k_dir, sprintf("%s.kraken2.report.txt", sample_id)))
     b_dir <- file.path(out_dir, "bracken")
-    dir.create(b_dir, recursive = TRUE, showWarnings = FALSE)
-    writeLines(c("name\ttaxonomy_id\ttaxonomy_lvl\tkraken_assigned_reads\tadded_reads\tnew_est_reads\tfraction_total_reads"),
-               file.path(b_dir, sprintf("%s.bracken.report", sample_id)))
+    dir.create(b_dir, recursive = TRUE)
+    header <- "name\ttaxonomy_id\ttaxonomy_lvl\tkraken_assigned_reads\tadded_reads\tnew_est_reads\tfraction_total_reads"
+    rows <- vapply(seq_along(taxa), function(i) paste(sub(".*;", "", taxa[i]), tids[i], "S", taxa_counts[i], 0, taxa_counts[i], taxa_counts[i]/classified, sep="\t"), character(1))
+    writeLines(c(header, rows), file.path(b_dir, sprintf("%s.bracken.report", sample_id)))
   }
 
   out_dir
@@ -94,7 +109,7 @@ test_that("merge_wf16s_cohort rejects non-existent input directory", {
 test_that("merge_wf16s_cohort rejects duplicate source directories", {
   root <- tempfile("cohort_test_dup_")
   dir.create(root)
-  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Fungi;TaxonA" = 10))
+  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
 
   expect_error(
     merge_wf16s_cohort(input_dirs = c(bundle1, bundle1), output_dir = file.path(root, "merged")),
@@ -105,8 +120,8 @@ test_that("merge_wf16s_cohort rejects duplicate source directories", {
 test_that("merge_wf16s_cohort rejects output directory overlapping with input", {
   root <- tempfile("cohort_test_overlap_")
   dir.create(root)
-  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Fungi;TaxonA" = 10))
-  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "Sample_2", c("Fungi;TaxonB" = 20))
+  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "Sample_2", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
 
   expect_error(
     merge_wf16s_cohort(input_dirs = c(bundle1, bundle2), output_dir = file.path(bundle1, "nested_out")),
@@ -117,8 +132,8 @@ test_that("merge_wf16s_cohort rejects output directory overlapping with input", 
 test_that("merge_wf16s_cohort rejects colliding sample IDs", {
   root <- tempfile("cohort_test_same_sample_")
   dir.create(root)
-  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "SameSampleID", c("Fungi;TaxonA" = 10))
-  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "SameSampleID", c("Fungi;TaxonB" = 20))
+  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "SameSampleID", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "SameSampleID", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
 
   expect_error(
     merge_wf16s_cohort(input_dirs = c(bundle1, bundle2), output_dir = file.path(root, "merged")),
@@ -129,8 +144,8 @@ test_that("merge_wf16s_cohort rejects colliding sample IDs", {
 test_that("merge_wf16s_cohort rejects mixed classifiers across inputs", {
   root <- tempfile("cohort_test_mixed_")
   dir.create(root)
-  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Fungi;TaxonA" = 10), classifier = "kraken2")
-  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "Sample_2", c("Fungi;TaxonB" = 20), classifier = "minimap2")
+  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10), classifier = "kraken2")
+  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "Sample_2", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20), classifier = "minimap2")
 
   expect_error(
     merge_wf16s_cohort(input_dirs = c(bundle1, bundle2), output_dir = file.path(root, "merged")),
@@ -141,8 +156,8 @@ test_that("merge_wf16s_cohort rejects mixed classifiers across inputs", {
 test_that("merge_wf16s_cohort rejects threshold mismatch across inputs", {
   root <- tempfile("cohort_test_thresh_")
   dir.create(root)
-  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Fungi;TaxonA" = 10), min_len = 250)
-  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "Sample_2", c("Fungi;TaxonB" = 20), min_len = 300)
+  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10), min_len = 250)
+  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "Sample_2", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20), min_len = 300)
 
   expect_error(
     merge_wf16s_cohort(input_dirs = c(bundle1, bundle2), output_dir = file.path(root, "merged")),
@@ -153,8 +168,8 @@ test_that("merge_wf16s_cohort rejects threshold mismatch across inputs", {
 test_that("merge_wf16s_cohort --validate-only succeeds without mutating filesystem", {
   root <- tempfile("cohort_test_val_only_")
   dir.create(root)
-  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Fungi;TaxonA" = 10))
-  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "Sample_2", c("Fungi;TaxonB" = 20))
+  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "Sample_2", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
   out_dir <- file.path(root, "merged_val_only")
 
   res <- merge_wf16s_cohort(
@@ -172,9 +187,9 @@ test_that("merge_wf16s_cohort performs full outer join, neutral metadata, config
   # Sample 1: TaxonA (10), TaxonB (20), Unclassified (5)
   # Sample 2: TaxonB (30), TaxonC (40), Unclassified (8)
   bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1",
-                                         c("Fungi;TaxonA" = 10, "Fungi;TaxonB" = 20), unclass_count = 5)
+                                         c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10, "Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20), unclass_count = 5)
   bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "Sample_2",
-                                         c("Fungi;TaxonB" = 30, "Fungi;TaxonC" = 40), unclass_count = 8)
+                                         c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 30, "Eukaryota;Fungi;P;C;O;F;G;TaxonC" = 40), unclass_count = 8)
   out_dir <- file.path(root, "merged_cohort")
 
   res <- merge_wf16s_cohort(
@@ -199,21 +214,21 @@ test_that("merge_wf16s_cohort performs full outer join, neutral metadata, config
   expect_equal(as.numeric(ab_df$total[1]), 13.0)
 
   # TaxonA: present in S1 (10), absent in S2 (0)
-  row_a <- ab_df[ab_df$tax == "Fungi;TaxonA", ]
+  row_a <- ab_df[ab_df$tax == "Eukaryota;Fungi;P;C;O;F;G;TaxonA", ]
   expect_equal(nrow(row_a), 1)
   expect_equal(as.numeric(row_a$Sample_1), 10.0)
   expect_equal(as.numeric(row_a$Sample_2), 0.0)
   expect_equal(as.numeric(row_a$total), 10.0)
 
   # TaxonB: present in both S1 (20) and S2 (30)
-  row_b <- ab_df[ab_df$tax == "Fungi;TaxonB", ]
+  row_b <- ab_df[ab_df$tax == "Eukaryota;Fungi;P;C;O;F;G;TaxonB", ]
   expect_equal(nrow(row_b), 1)
   expect_equal(as.numeric(row_b$Sample_1), 20.0)
   expect_equal(as.numeric(row_b$Sample_2), 30.0)
   expect_equal(as.numeric(row_b$total), 50.0)
 
   # TaxonC: absent in S1 (0), present in S2 (40)
-  row_c <- ab_df[ab_df$tax == "Fungi;TaxonC", ]
+  row_c <- ab_df[ab_df$tax == "Eukaryota;Fungi;P;C;O;F;G;TaxonC", ]
   expect_equal(nrow(row_c), 1)
   expect_equal(as.numeric(row_c$Sample_1), 0.0)
   expect_equal(as.numeric(row_c$Sample_2), 40.0)
@@ -258,8 +273,8 @@ test_that("merge_wf16s_cohort performs full outer join, neutral metadata, config
 test_that("merge_wf16s_cohort refuses existing destination without overwrite and succeeds with overwrite", {
   root <- tempfile("cohort_test_overwrite_")
   dir.create(root)
-  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Fungi;TaxonA" = 10))
-  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "Sample_2", c("Fungi;TaxonB" = 20))
+  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "Sample_2", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
   out_dir <- file.path(root, "merged_dest")
 
   merge_wf16s_cohort(input_dirs = c(bundle1, bundle2), output_dir = out_dir)
@@ -290,4 +305,35 @@ test_that("parse_merge_cli_args parses repeated and comma-separated options", {
   expect_identical(parsed2$inputs, c("dirA", "dirB"))
   expect_identical(parsed2$output_dir, "out2")
   expect_true(parsed2$validate_only)
+})
+
+test_that("merger validates report accounting before validate-only success", {
+  root <- tempfile(); dir.create(root)
+  a <- make_synthetic_sample_bundle(file.path(root,"a"),"A",c("Eukaryota;Fungi;P;C;O;F;G;TaxonA"=10))
+  b <- make_synthetic_sample_bundle(file.path(root,"b"),"B",c("Eukaryota;Fungi;P;C;O;F;G;TaxonB"=20))
+  report <- file.path(a,"kraken2","A.kraken2.report.txt")
+  writeLines("100.00\t10\t10\tU\t0\tunclassified",report)
+  out <- file.path(root,"merged")
+  expect_error(merge_wf16s_cohort(c(a,b),out,validate_only=TRUE),"Accounting failure")
+  expect_false(dir.exists(out))
+})
+
+test_that("merger protects unrelated files and honors actual configured length bounds", {
+  root <- tempfile(); dir.create(root)
+  a <- make_synthetic_sample_bundle(file.path(root,"a"),"A",c("Eukaryota;Fungi;P;C;O;F;G;TaxonA"=10),min_len=300,max_len=900)
+  b <- make_synthetic_sample_bundle(file.path(root,"b"),"B",c("Eukaryota;Fungi;P;C;O;F;G;TaxonB"=20),min_len=300,max_len=900)
+  out <- file.path(root,"merged")
+  merge_wf16s_cohort(c(a,b),out)
+  cfg <- yaml::read_yaml(file.path(out,"config.yml"))
+  expect_equal(cfg$qc$display_min_length,300)
+  expect_equal(cfg$qc$display_max_length,900)
+  cfg <- load_config(file.path(out,"config.yml"))
+  expect_length(validate_cohort_merge_input(cfg),2)
+  source_table <- file.path(a,"abundance_table_species.tsv")
+  writeLines(c(readLines(source_table),""),source_table)
+  expect_error(validate_cohort_merge_input(cfg),"E_COHORT_PROVENANCE")
+  unrelated <- file.path(out,"notes.txt"); writeLines("keep",unrelated)
+  expect_error(merge_wf16s_cohort(c(a,b),out,overwrite=TRUE),"E_COHORT_DESTINATION_UNOWNED")
+  expect_equal(readLines(unrelated),"keep")
+  expect_null(locate_kraken_report_file(a,"unrelated_sample"))
 })

@@ -1,0 +1,205 @@
+{
+  "audit_date": "2026-10-10",
+  "method": "local files, no sequence or network access",
+  "samples": [
+    {
+      "sample": "Biomecon_ITS-kraken2",
+      "workflow_versions_from_log": [
+        "1.6.1",
+        "1.6.1."
+      ],
+      "workflow_revisions_from_log": [
+        "e2b77380f8"
+      ],
+      "params": {
+        "classifier": "kraken2",
+        "database_set": "ncbi_16s_18s_28s_ITS",
+        "taxonomic_rank": "S",
+        "min_len": 250,
+        "max_len": 1000,
+        "min_read_qual": 15,
+        "min_percent_identity": 95,
+        "min_ref_coverage": 90,
+        "abundance_threshold": 1,
+        "kraken2_confidence": 0,
+        "bracken_threshold": 10,
+        "bracken_length": null
+      },
+      "launch_params_missing_contract_fields": [
+        "bracken_length",
+        "database_sets"
+      ],
+      "assignment_rows": 40204,
+      "raw_classified": 15559,
+      "raw_unclassified": 24645,
+      "c_taxid_zero": 0,
+      "length_range": [
+        250,
+        1000
+      ],
+      "abundance_rows": 69,
+      "species_estimate_sum": 13984,
+      "abundance_unclassified": 24645,
+      "abundance_table_sum": 38629,
+      "raw_classified_minus_species_estimates": 1575,
+      "positive_abundance_domains": [
+        "Eukaryota"
+      ],
+      "bracken_taxid_backed_row_match": true,
+      "name_aliases": [
+        {
+          "taxid": "2499453",
+          "bracken_name": "Stomiopeltis sinensis",
+          "lineage_name": "Exopassalora sinensis",
+          "estimated_count": 162
+        },
+        {
+          "taxid": "52256",
+          "bracken_name": "[Candida] ethanolica",
+          "lineage_name": "Pichia ethanolica",
+          "estimated_count": 307
+        },
+        {
+          "taxid": "1206149",
+          "bracken_name": "Galactomyces pseudocandidus",
+          "lineage_name": "Geotrichum pseudocandidum",
+          "estimated_count": 26
+        }
+      ],
+      "kraken_direct_counts_match_assignments": true,
+      "placeholder_differences": [
+        {
+          "taxid": "1183333",
+          "abundance_path": "Eukaryota;Fungi;Ascomycota;Dipodascomycetes;Dipodascales;Dipodascales_Incertae_sedis;Dipodascales_Incertae_sedis;[Candida] tunisiensis",
+          "assignment_lineage": "Eukaryota|Ascomycota|Dipodascomycetes|Dipodascales|unclassified Dipodascales family|unclassified Dipodascales genus|[Candida] tunisiensis"
+        },
+        {
+          "taxid": "110093",
+          "abundance_path": "Eukaryota;Fungi;Chytridiomycota;Chytridiomycetes;Polychytriales;Polychytriales_Incertae_sedis;Polychytrium;Polychytrium aggregatum",
+          "assignment_lineage": "Eukaryota|Chytridiomycota|Chytridiomycetes|Polychytriales|unclassified Polychytriales family|Polychytrium|Polychytrium aggregatum"
+        }
+      ],
+      "files": [
+        {
+          "path": "wf-16s_Biomecon-ITS-kraken2/wf-16s_Biomecon-ITS-kraken2/output/params.json",
+          "sha256": "f0a34464376648b29a065c731b124b928621c6139f358d045e8ca62da8598809"
+        },
+        {
+          "path": "wf-16s_Biomecon-ITS-kraken2/wf-16s_Biomecon-ITS-kraken2/output/abundance_table_species.tsv",
+          "sha256": "b4572fd9391aaca79f49a0b16aeb01a41cac668815738852730fc38216fa29ae"
+        },
+        {
+          "path": "wf-16s_Biomecon-ITS-kraken2/wf-16s_Biomecon-ITS-kraken2/output/reads_assignments/Biomecon_ITS-kraken2_lineages.kraken2.assignments.tsv",
+          "sha256": "8f1b408e1db48a2e678a04a9a5c83d7dd2e7fe76e19f738dead37d11f7614809"
+        },
+        {
+          "path": "wf-16s_Biomecon-ITS-kraken2/wf-16s_Biomecon-ITS-kraken2/output/kraken2/Biomecon_ITS-kraken2.kraken2.report.txt",
+          "sha256": "d4fc891753f4414a3756bd539920d6dfc5659d93c32ccf8bdcd71d8b815662f1"
+        },
+        {
+          "path": "wf-16s_Biomecon-ITS-kraken2/wf-16s_Biomecon-ITS-kraken2/output/bracken/Biomecon_ITS-kraken2.kraken2_bracken.report",
+          "sha256": "8fe7291c321670f1bb10a88ab40a342964b6f84185ac079cef9d88811c8fcf50"
+        },
+        {
+          "path": "wf-16s_Biomecon-ITS-kraken2/wf-16s_Biomecon-ITS-kraken2/output/versions_all.txt",
+          "sha256": "392b48cd5bced3f492fbf3364d54e0e7479cc6895da1ad26429b8ba8602c1b73"
+        },
+        {
+          "path": "wf-16s_Biomecon-ITS-kraken2/wf-16s_Biomecon-ITS-kraken2/nextflow.stdout",
+          "sha256": "dd4a4a034ff7b6f780091a35233cee189d7030082693323c7d673fe8e50824fd"
+        }
+      ]
+    },
+    {
+      "sample": "Knegative_ITS-kraken2",
+      "workflow_versions_from_log": [
+        "1.6.1",
+        "1.6.1."
+      ],
+      "workflow_revisions_from_log": [
+        "e2b77380f8"
+      ],
+      "params": {
+        "classifier": "kraken2",
+        "database_set": "ncbi_16s_18s_28s_ITS",
+        "taxonomic_rank": "S",
+        "min_len": 250,
+        "max_len": 1000,
+        "min_read_qual": 15,
+        "min_percent_identity": 95,
+        "min_ref_coverage": 90,
+        "abundance_threshold": 1,
+        "kraken2_confidence": 0,
+        "bracken_threshold": 10,
+        "bracken_length": null
+      },
+      "launch_params_missing_contract_fields": [
+        "bracken_length",
+        "database_sets"
+      ],
+      "assignment_rows": 26643,
+      "raw_classified": 5469,
+      "raw_unclassified": 21174,
+      "c_taxid_zero": 0,
+      "length_range": [
+        250,
+        996
+      ],
+      "abundance_rows": 36,
+      "species_estimate_sum": 4796,
+      "abundance_unclassified": 21174,
+      "abundance_table_sum": 25970,
+      "raw_classified_minus_species_estimates": 673,
+      "positive_abundance_domains": [
+        "Eukaryota"
+      ],
+      "bracken_taxid_backed_row_match": true,
+      "name_aliases": [
+        {
+          "taxid": "2499453",
+          "bracken_name": "Stomiopeltis sinensis",
+          "lineage_name": "Exopassalora sinensis",
+          "estimated_count": 78
+        }
+      ],
+      "kraken_direct_counts_match_assignments": true,
+      "placeholder_differences": [
+        {
+          "taxid": "1246581",
+          "abundance_path": "Eukaryota;Fungi;Cryptomycota;Cryptomycota_Incertae_sedis;Cryptomycota_Incertae_sedis;Cryptomycota_Incertae_sedis;Paramicrosporidium;Paramicrosporidium saccamoebae",
+          "assignment_lineage": "Eukaryota|Cryptomycota|unclassified Cryptomycota class|unclassified Cryptomycota order|unclassified Cryptomycota family|Paramicrosporidium|Paramicrosporidium saccamoebae"
+        }
+      ],
+      "files": [
+        {
+          "path": "wf-16s_Knegative-ITS-kraken2/wf-16s_Knegative-ITS-kraken2/output/params.json",
+          "sha256": "3f799e7435c65fe37df4d930804969852917bf753c53995024873baf167f1440"
+        },
+        {
+          "path": "wf-16s_Knegative-ITS-kraken2/wf-16s_Knegative-ITS-kraken2/output/abundance_table_species.tsv",
+          "sha256": "b9efd57f25109988450f79f37db8ae92c29e1117612a6dcd4830d11e4b09347a"
+        },
+        {
+          "path": "wf-16s_Knegative-ITS-kraken2/wf-16s_Knegative-ITS-kraken2/output/reads_assignments/Knegative_ITS-kraken2_lineages.kraken2.assignments.tsv",
+          "sha256": "fdad8fb333274bdc9f14379ba82b760425afbe009e4a726d372c77234376c2d8"
+        },
+        {
+          "path": "wf-16s_Knegative-ITS-kraken2/wf-16s_Knegative-ITS-kraken2/output/kraken2/Knegative_ITS-kraken2.kraken2.report.txt",
+          "sha256": "ecf2bcee59e6fec32f28c56e7212162a4a4633a88034d34c89d5aa2d4b928a87"
+        },
+        {
+          "path": "wf-16s_Knegative-ITS-kraken2/wf-16s_Knegative-ITS-kraken2/output/bracken/Knegative_ITS-kraken2.kraken2_bracken.report",
+          "sha256": "f171ceddd7bfbb59dd40b2548bf65667a853f1a6d3aa1401f34aaf7bc34f53e3"
+        },
+        {
+          "path": "wf-16s_Knegative-ITS-kraken2/wf-16s_Knegative-ITS-kraken2/output/versions_all.txt",
+          "sha256": "392b48cd5bced3f492fbf3364d54e0e7479cc6895da1ad26429b8ba8602c1b73"
+        },
+        {
+          "path": "wf-16s_Knegative-ITS-kraken2/wf-16s_Knegative-ITS-kraken2/nextflow.stdout",
+          "sha256": "f7bec6974d5580391c5917c78da7d407438045d390eec1ce1e95c5cbe7ac5f7a"
+        }
+      ]
+    }
+  ]
+}

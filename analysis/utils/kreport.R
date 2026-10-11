@@ -486,7 +486,8 @@ resolve_krona_renderer <- function(krona_cfg, repo_root) {
 }
 
 render_builtin_krona_html <- function(python_cmd, builder_path, vendor_dir,
-                                      output_path, sample_id, input_path, expected_total) {
+                                      output_path, sample_id, input_path, expected_total,
+                                      count_basis = "minimap2_alignments") {
   if (!file.exists(builder_path) || dir.exists(builder_path)) {
     stop(sprintf("Builtin Krona renderer is missing: '%s'.", builder_path), call. = FALSE)
   }
@@ -503,6 +504,7 @@ render_builtin_krona_html <- function(python_cmd, builder_path, vendor_dir,
     "--input", input_path,
     "--output", output_path,
     "--dataset-name", sample_id,
+    "--count-basis", count_basis,
     "--expected-total", format_krona_magnitude(expected_total),
     "--vendor-dir", vendor_dir
   )

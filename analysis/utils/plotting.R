@@ -80,6 +80,29 @@ get_phylum_colors <- function(phyla) {
   cols
 }
 
+label_abundance_plot <- function(plot, context) {
+  if (!identical(context$count_basis, "bracken_species_estimates")) return(plot)
+  replacements <- c(
+    "All-read Classification Fraction" = "Species estimate fraction (E / T)",
+    "classified reads" = "Bracken species estimates", "Classified reads" = "Bracken species estimates",
+    "classified-read" = "species-estimate", "all reads" = "abundance counts (T = E + U)",
+    "Reads Subsampled" = "Species estimate counts subsampled",
+    "Read Count" = "Species Estimate Count", "Read count" = "Species estimate count",
+    " reads" = " estimate counts")
+  labels <- plot$labels
+  for (name in names(labels)) {
+    if (!is.character(labels[[name]])) next
+    for (old in names(replacements)) labels[[name]] <- gsub(old, replacements[[old]], labels[[name]], fixed = TRUE)
+  }
+  labels$caption <- paste(c(labels$caption,
+    "Bracken species estimates; classified denominator E; total denominator T = E + raw unclassified U."), collapse = "\n")
+  plot + do.call(ggplot2::labs, labels)
+}
+
+save_abundance_plot <- function(context, filename, plot, ...) {
+  save_plot(filename, label_abundance_plot(plot, context), ...)
+}
+
 save_plot <- function(filename, plot, width = 7, height = 5, dpi = 150) {
   dir.create(dirname(filename), recursive = TRUE, showWarnings = FALSE)
   ggplot2::ggsave(filename = filename, plot = plot, width = width, height = height, dpi = dpi)

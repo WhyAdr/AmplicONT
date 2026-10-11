@@ -27,3 +27,8 @@ output:
 qc:
   display_min_length: 250
   display_max_length: 1000
+
+taxonomy:
+  cache: "taxonomy_cache.json"
+  network_mode: "cache_only"
+  unresolved_policy: "error"

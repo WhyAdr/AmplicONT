@@ -320,7 +320,8 @@ def _data_uri(relative: str, content: bytes) -> str:
     return f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"
 
 
-def build_html(xml_bytes: bytes, dataset_name: str, vendor_dir: os.PathLike[str] | str) -> bytes:
+def build_html(xml_bytes: bytes, dataset_name: str, vendor_dir: os.PathLike[str] | str,
+               count_basis: str = "minimap2_alignments") -> bytes:
     """Embed Krona JavaScript, images, and XML into a standalone HTML document."""
 
     dataset = _require_text(dataset_name, "dataset name")
@@ -339,6 +340,9 @@ def build_html(xml_bytes: bytes, dataset_name: str, vendor_dir: os.PathLike[str]
         _fail("vendored Krona JavaScript contains a closing script tag")
 
     title = html.escape(f"Krona - {dataset}", quote=True)
+    estimate_note = ""
+    if count_basis == "bracken_species_estimates":
+        estimate_note = '<p style="position:fixed;bottom:0;z-index:100;background:white">Bracken species estimates; total denominator T = E + raw unclassified U.</p>\n'
     document = (
         "<!doctype html>\n"
         '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">\n'
@@ -352,6 +356,7 @@ def build_html(xml_bytes: bytes, dataset_name: str, vendor_dir: os.PathLike[str]
         "  </script>\n"
         " </head>\n"
         " <body>\n"
+        f"{estimate_note}"
         f'  <img id="hiddenImage" src="{hidden_uri}" style="display:none" alt="Hidden Image"/>\n'
         f'  <img id="loadingImage" src="{loading_uri}" style="display:none" alt="Loading Indicator"/>\n'
         f'  <img id="logo" src="{logo_uri}" style="display:none" alt="Logo of Krona"/>\n'
@@ -399,6 +404,7 @@ def render(
     dataset_name: str,
     expected_total: object,
     vendor_dir: os.PathLike[str] | str,
+    count_basis: str = "minimap2_alignments",
 ) -> None:
     records = parse_krona_input(input_path)
     total = parse_nonnegative_integer(expected_total, "expected total")
@@ -407,7 +413,7 @@ def render(
         _fail(f"input magnitude sum ({observed}) does not equal expected total ({total})")
     dataset_label = Path(input_path).stem
     xml_bytes = build_krona_xml(records, dataset_name, dataset_label)
-    atomic_write(output_path, build_html(xml_bytes, dataset_name, vendor_dir))
+    atomic_write(output_path, build_html(xml_bytes, dataset_name, vendor_dir, count_basis))
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -418,6 +424,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", dest="output_path", help="standalone HTML output")
     parser.add_argument("--dataset-name", "--dataset", dest="dataset_name")
     parser.add_argument("--expected-total", dest="expected_total")
+    parser.add_argument("--count-basis", choices=("minimap2_alignments", "bracken_species_estimates"), default="minimap2_alignments")
     parser.add_argument("--vendor-dir", required=True, help="pinned Krona vendor directory")
     parser.add_argument("--validate-only", action="store_true", help="validate assets without writing output")
     parser.add_argument("--version", action="version", version=f"{Path(__file__).name} {BUILDER_VERSION}")
@@ -441,7 +448,7 @@ def main(argv: list[str] | None = None) -> int:
             _fail("--dataset-name is required")
         if args.expected_total is None:
             _fail("--expected-total is required")
-        render(input_path, output_path, args.dataset_name, args.expected_total, args.vendor_dir)
+        render(input_path, output_path, args.dataset_name, args.expected_total, args.vendor_dir, args.count_basis)
         return 0
     except (BuilderError, OSError, UnicodeError, binascii.Error) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

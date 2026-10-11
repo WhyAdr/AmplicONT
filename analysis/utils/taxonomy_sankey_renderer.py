@@ -287,6 +287,7 @@ def _validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         fail("source direct counts do not equal classified reads")
     return {
         "sample_id": payload["sample_id"],
+        "count_basis": payload.get("count_basis", "minimap2_alignments"),
         "renderer": payload["renderer"],
         "schema_version": payload["schema_version"],
         "renderer_version": payload["renderer_version"],
@@ -720,8 +721,9 @@ def build_document(payload: dict[str, Any], source_bytes: bytes, ranks: list[str
         "source_renderer": source["renderer"],
         "source_schema_version": source["schema_version"],
         "source_payload_sha256": hashlib.sha256(source_bytes).hexdigest(),
-        "count_model": COUNT_MODEL,
-        "denominator": "TotalReads",
+        "count_model": ("Bracken species estimates plus raw Kraken unclassified count"
+                        if source["count_basis"] == "bracken_species_estimates" else COUNT_MODEL),
+        "denominator": "T" if source["count_basis"] == "bracken_species_estimates" else "TotalReads",
         "totals": {
             "total": source["total"],
             "classified": source["classified"],
@@ -742,6 +744,9 @@ def _client_source(path: Path) -> str:
 def build_html(payload_bytes: bytes, sample_id: str, client_text: str) -> bytes:
     encoded = base64.b64encode(payload_bytes).decode("ascii")
     title = html.escape(sample_id, quote=True)
+    estimate_note = ""
+    if json.loads(payload_bytes).get("denominator") == "T":
+        estimate_note = "<p>Bracken species estimates: classified counts = E; total denominator T = E + raw unclassified U. Raw Kraken assignments use N = C + U.</p>"
     csp = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
            "img-src data:; connect-src 'none'; font-src 'none'; object-src 'none'; "
            "base-uri 'none'; form-action 'none'")
@@ -770,7 +775,7 @@ button, select, input {{ font:inherit; }}
 </style>
 </head>
 <body>
-<header><h1>Taxonomy Sankey — {title}</h1>
+<header><h1>Taxonomy Sankey — {title}</h1>{estimate_note}
 <p>Original offline taxonomy-flow viewer. The sibling <code>.kreport</code> remains the official Pavian interoperability artifact.</p></header>
 <section class="summary" aria-label="Read totals">
 <span>Total: <strong id="total"></strong></span>

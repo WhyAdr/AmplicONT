@@ -188,7 +188,7 @@ run_alpha <- function(context) {
       theme(legend.position = "none")
   }
   p_curve_path <- file.path(alpha_dir, "02a_rarefaction_curve.png")
-  save_plot(p_curve_path, p_curve, width = 8, height = 5.5, dpi = 150)
+  save_abundance_plot(context, p_curve_path, p_curve, width = 8, height = 5.5, dpi = 150)
   all_outputs <- c(all_outputs, p_curve_path)
 
   sample_depths <- colSums(class_matrix)
@@ -255,7 +255,7 @@ run_alpha <- function(context) {
       )
       if (is.null(plot)) next
       path <- file.path(alpha_dir, spec$file)
-      save_plot(path, plot, width = spec$width, height = spec$height, dpi = 150)
+      save_abundance_plot(context, path, plot, width = spec$width, height = spec$height, dpi = 150)
       all_outputs <- c(all_outputs, path)
       contract <- registry[registry$FigureKey == figure_key, , drop = FALSE]
       contract <- contract[order(contract$FacetOrder), , drop = FALSE]

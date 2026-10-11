@@ -27,6 +27,21 @@ HEADER = "SampleID\tDepth\tRankCode\tNodeName\tTaxonPath\tTaxID\tStatus\tResolut
 
 
 class CorrespondenceMutationTests(unittest.TestCase):
+    def test_bracken_basis_is_verified_independently(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "bracken.json"
+            html_out = Path(directory) / "bracken.html"
+            status = VIEWER.main([
+                "--kreport", str(self.report), "--resolution-tsv", str(self.sidecar),
+                "--sample-id", "S1", "--expected-total", "100", "--count-basis", "bracken_species_estimates",
+                "--json-out", str(output), "--html-out", str(html_out),
+            ])
+            self.assertEqual(status, 0)
+            VERIFY.verify(self.report, self.sidecar, "S1", output, html_out, 100, "bracken_species_estimates")
+            self.assertIn("Bracken species estimates", html_out.read_text(encoding="utf-8"))
+            with self.assertRaises(ValueError):
+                VERIFY.verify(self.report, self.sidecar, "S1", output, html_out, 100)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

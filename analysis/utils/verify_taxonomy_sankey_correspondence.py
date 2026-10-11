@@ -190,6 +190,7 @@ def validate_source(payload: dict[str, Any]) -> dict[str, Any]:
     if sum(node["direct"] for node in nodes) != classified:
         fail("source direct counts do not equal classified reads")
     return {"sample_id": sample, "renderer_version": version, "total": total,
+            "count_basis": payload.get("count_basis", "minimap2_alignments"),
             "classified": classified, "unclassified": unclassified, "nodes": nodes,
             "by_path": by_path, "by_rank": by_rank}
 
@@ -436,8 +437,9 @@ def expected_document(payload: dict[str, Any], source_bytes: bytes, ranks: list[
         "source_renderer": "builtin_kraken_report_explorer",
         "source_schema_version": 1,
         "source_payload_sha256": hashlib.sha256(source_bytes).hexdigest(),
-        "count_model": COUNT_MODEL,
-        "denominator": "TotalReads",
+        "count_model": ("Bracken species estimates plus raw Kraken unclassified count"
+                        if source["count_basis"] == "bracken_species_estimates" else COUNT_MODEL),
+        "denominator": "T" if source["count_basis"] == "bracken_species_estimates" else "TotalReads",
         "totals": {"total": source["total"], "classified": source["classified"],
                    "unclassified": source["unclassified"]},
         "defaults": {"ranks": ranks, "max_taxa_per_rank": limit},

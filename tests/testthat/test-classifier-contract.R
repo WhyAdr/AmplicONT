@@ -12,15 +12,15 @@ test_that("parse_kraken_report parses standard 6-column reports and computes tot
   lines <- c(
     " 40.00\t20\t20\tU\t0\tunclassified",
     " 60.00\t30\t0\tR\t1\troot",
-    " 60.00\t30\t0\tD\t2759\tEukaryota",
-    " 60.00\t30\t0\tK\t4751\tFungi",
-    " 60.00\t30\t0\tP\t4890\tAscomycota",
-    " 60.00\t30\t0\tC\t147537\tSaccharomycetes",
-    " 60.00\t30\t0\tO\t4891\tSaccharomycetales",
-    " 60.00\t30\t0\tF\t4892\tSaccharomycetaceae",
-    " 60.00\t30\t0\tG\t4930\tSaccharomyces",
-    " 56.00\t28\t28\tS\t4932\t  Saccharomyces cerevisiae",
-    "  4.00\t2\t2\tS\t4934\t  Saccharomyces pastorianus"
+    " 60.00\t30\t0\tD\t2759\t  Eukaryota",
+    " 60.00\t30\t0\tK\t4751\t    Fungi",
+    " 60.00\t30\t0\tP\t4890\t      Ascomycota",
+    " 60.00\t30\t0\tC\t147537\t        Saccharomycetes",
+    " 60.00\t30\t0\tO\t4891\t          Saccharomycetales",
+    " 60.00\t30\t0\tF\t4892\t            Saccharomycetaceae",
+    " 60.00\t30\t0\tG\t4930\t              Saccharomyces",
+    " 56.00\t28\t28\tS\t4932\t                Saccharomyces cerevisiae",
+    "  4.00\t2\t2\tS\t4934\t                Saccharomyces pastorianus"
   )
   path <- tempfile("kraken_rep_", fileext = ".txt")
   writeLines(lines, path)
@@ -44,7 +44,7 @@ test_that("parse_bracken_abundance parses 7-column report and checks column form
   br <- parse_bracken_abundance(path)
   expect_equal(br$species_estimate_sum, 28)
   expect_equal(nrow(br$df), 1)
-  expect_equal(br$df$taxonomy_id[1], 4932)
+  expect_equal(br$df$taxonomy_id[1], "4932")
   expect_equal(br$df$new_est_reads[1], 28)
   expect_equal(br$df$taxonomy_lvl[1], "S")
 

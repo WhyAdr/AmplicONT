@@ -296,10 +296,14 @@ def read_renderer_version() -> str:
 
 
 def verify(kreport: Path, resolution_tsv: Path, sample_id: str, json_path: Path,
-           html_path: Path | None, expected_total: int) -> None:
+           html_path: Path | None, expected_total: int, count_basis: str = "minimap2_alignments") -> None:
     report = parse_report_independently(kreport, expected_total)
     resolution = parse_resolution_independently(resolution_tsv, sample_id)
     expected = expected_payload(report, resolution, sample_id, read_renderer_version())
+    if count_basis == "bracken_species_estimates":
+        expected.update(count_basis=count_basis, denominator="T",
+                        count_model="Bracken species estimates plus raw Kraken unclassified count",
+                        classified_definition="Bracken species estimate sum E")
     json_bytes = json_path.read_bytes()
     try:
         actual = json.loads(json_bytes.decode("utf-8"), parse_constant=lambda value: fail(
@@ -323,11 +327,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", required=True, type=Path, dest="json_path")
     parser.add_argument("--html", type=Path)
     parser.add_argument("--expected-total", required=True)
+    parser.add_argument("--count-basis", choices=("minimap2_alignments", "bracken_species_estimates"), default="minimap2_alignments")
     args = parser.parse_args(argv)
     try:
         expected_total = integer(args.expected_total, "expected-total")
         verify(args.kreport, args.resolution_tsv, args.sample_id, args.json_path,
-               args.html, expected_total)
+               args.html, expected_total, args.count_basis)
         return 0
     except Exception as exc:
         print(f"verify_kraken_viewer_correspondence: {exc}", file=sys.stderr)

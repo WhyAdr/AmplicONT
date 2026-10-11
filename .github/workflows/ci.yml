@@ -111,6 +111,8 @@ jobs:
           Rscript tests/verify_release_run.R "ci integration output"
           Rscript analysis/00_run_pipeline.R --config tests/fixtures/synthetic_minimap2/config.yml --output-dir "ci bamstats output" --pavian
           Rscript tests/verify_release_run.R "ci bamstats output"
+          Rscript analysis/00_run_pipeline.R --config tests/fixtures/synthetic_kraken2/config.yml --output-dir "ci kraken2 output" --krona --pavian
+          Rscript tests/verify_release_run.R "ci kraken2 output"
 
       - name: Record canonical Sankey hashes for cross-OS comparison
         shell: bash

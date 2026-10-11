@@ -304,7 +304,8 @@ run_kreport <- function(context, resolver_runner = NULL) {
             output_path = krona_html,
             sample_id = s,
             input_path = krona_tsv,
-            expected_total = total_reads
+            expected_total = total_reads,
+            count_basis = context$count_basis %||% "minimap2_alignments"
           )
         } else {
           render_kronatools_html(krona_executable, krona_html, s, krona_tsv)
@@ -398,6 +399,7 @@ run_kreport <- function(context, resolver_runner = NULL) {
         "--kreport", sample_record$path,
         "--resolution-tsv", res_summary_file,
         "--sample-id", sample_record$sample_id,
+        "--count-basis", context$count_basis %||% "minimap2_alignments",
         "--json-out", json_out,
         "--expected-total", formatC(sample_record$total_reads, format = "f", digits = 0)
       )

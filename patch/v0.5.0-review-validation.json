@@ -1,0 +1,349 @@
+{
+  "review_date": "2026-10-11",
+  "base_commit": "be0762d",
+  "mode": "local development, uncommitted patches, offline taxonomy",
+  "original_input_hashes_unchanged": true,
+  "r_tests": {
+    "cases": 188,
+    "expectations_passed": 1075,
+    "failures": 0,
+    "errors": 0
+  },
+  "python_tests": {
+    "cases": 85,
+    "skipped": 2,
+    "failures": 0
+  },
+  "node_tests": {
+    "cases": 1,
+    "failures": 0
+  },
+  "integrations": [
+    {
+      "name": "synthetic-kraken",
+      "pipeline_exit": 0,
+      "verification_exit": 0,
+      "output": "output\\review-20261011\\synthetic-kraken",
+      "manifest_sha256": "feb074fbc847d732c81221b68d64e4d2748c7587ff79b33591f7ac66b55ed11f",
+      "source_digest_sha256": "c1326697f06f64b55e2dbb89999d924f7e4c28585ccebde13a7b24a15f434a2e",
+      "accounting": {
+        "sample1": {
+          "N": 50,
+          "C": 30,
+          "U": 20,
+          "E": 28,
+          "T": 48,
+          "D": 2,
+          "assignments_checked": true,
+          "reconciliation_pass": true
+        }
+      },
+      "modules": {
+        "qc": {
+          "status": "completed",
+          "reason": null
+        },
+        "alpha": {
+          "status": "completed",
+          "reason": null
+        },
+        "beta": {
+          "status": "skipped",
+          "reason": "Beta diversity is cohort-only. Current mode is 'single' with 1 sample(s)."
+        },
+        "composition": {
+          "status": "completed",
+          "reason": null
+        },
+        "ordination": {
+          "status": "skipped",
+          "reason": "Ordination is cohort-only. Current mode is 'single' with 1 sample(s)."
+        },
+        "shared": {
+          "status": "skipped",
+          "reason": "Shared taxa module requires >= 2 samples. Current mode is 'single' with 1 sample(s)."
+        },
+        "kreport": {
+          "status": "completed",
+          "reason": null
+        },
+        "faprotax": {
+          "status": "not_run",
+          "reason": "Module 'faprotax' was not requested."
+        }
+      }
+    },
+    {
+      "name": "minimap",
+      "pipeline_exit": 0,
+      "verification_exit": 0,
+      "output": "output\\review-20261011\\minimap-regression",
+      "manifest_sha256": "0ded76136b530dc57b425f845a38d039e3126a4a90c157e97707b2811ed70195",
+      "source_digest_sha256": "c1326697f06f64b55e2dbb89999d924f7e4c28585ccebde13a7b24a15f434a2e",
+      "accounting": null,
+      "modules": {
+        "qc": {
+          "status": "completed",
+          "reason": null
+        },
+        "alpha": {
+          "status": "completed",
+          "reason": null
+        },
+        "beta": {
+          "status": "skipped",
+          "reason": "Beta diversity is cohort-only. Current mode is 'single' with 1 sample(s)."
+        },
+        "composition": {
+          "status": "completed",
+          "reason": null
+        },
+        "ordination": {
+          "status": "skipped",
+          "reason": "Ordination is cohort-only. Current mode is 'single' with 1 sample(s)."
+        },
+        "shared": {
+          "status": "skipped",
+          "reason": "Shared taxa module requires >= 2 samples. Current mode is 'single' with 1 sample(s)."
+        },
+        "kreport": {
+          "status": "completed",
+          "reason": null
+        },
+        "faprotax": {
+          "status": "not_run",
+          "reason": "Module 'faprotax' was not requested."
+        }
+      }
+    },
+    {
+      "name": "Biomecon",
+      "pipeline_exit": 0,
+      "verification_exit": 0,
+      "output": "output\\review-20261011\\Biomecon_ITS-kraken2",
+      "manifest_sha256": "b6c0467c963ffb37f40bbf2d05537c919f857243023252a45eccb7dd8370858d",
+      "source_digest_sha256": "c1326697f06f64b55e2dbb89999d924f7e4c28585ccebde13a7b24a15f434a2e",
+      "accounting": {
+        "Biomecon_ITS-kraken2": {
+          "N": 40204,
+          "C": 15559,
+          "U": 24645,
+          "E": 13984,
+          "T": 38629,
+          "D": 1575,
+          "assignments_checked": true,
+          "reconciliation_pass": true
+        }
+      },
+      "modules": {
+        "qc": {
+          "status": "completed",
+          "reason": null
+        },
+        "alpha": {
+          "status": "completed",
+          "reason": null
+        },
+        "beta": {
+          "status": "skipped",
+          "reason": "Beta diversity is cohort-only. Current mode is 'single' with 1 sample(s)."
+        },
+        "composition": {
+          "status": "completed",
+          "reason": null
+        },
+        "ordination": {
+          "status": "skipped",
+          "reason": "Ordination is cohort-only. Current mode is 'single' with 1 sample(s)."
+        },
+        "shared": {
+          "status": "skipped",
+          "reason": "Shared taxa module requires >= 2 samples. Current mode is 'single' with 1 sample(s)."
+        },
+        "kreport": {
+          "status": "completed",
+          "reason": null
+        },
+        "faprotax": {
+          "status": "skipped",
+          "reason": "No eligible prokaryotic taxa"
+        }
+      },
+      "taxonomy_provenance": {
+        "mode": "cache_only",
+        "unresolved_count": 122,
+        "conflicts_count": 25,
+        "resolution_source_counts": {
+          "assignment": 68,
+          "assignment_conflict": 0,
+          "ncbi_refresh": 0,
+          "source_cache": 0,
+          "unresolved": 122
+        },
+        "source_cache_updated": false
+      }
+    },
+    {
+      "name": "Knegative",
+      "pipeline_exit": 0,
+      "verification_exit": 0,
+      "output": "output\\review-20261011\\Knegative_ITS-kraken2",
+      "manifest_sha256": "a523fd0be57670861bbba54f8ada213079f0388964f72ea545aff40fa81befeb",
+      "source_digest_sha256": "c1326697f06f64b55e2dbb89999d924f7e4c28585ccebde13a7b24a15f434a2e",
+      "accounting": {
+        "Knegative_ITS-kraken2": {
+          "N": 26643,
+          "C": 5469,
+          "U": 21174,
+          "E": 4796,
+          "T": 25970,
+          "D": 673,
+          "assignments_checked": true,
+          "reconciliation_pass": true
+        }
+      },
+      "modules": {
+        "qc": {
+          "status": "completed",
+          "reason": null
+        },
+        "alpha": {
+          "status": "completed",
+          "reason": null
+        },
+        "beta": {
+          "status": "skipped",
+          "reason": "Beta diversity is cohort-only. Current mode is 'single' with 1 sample(s)."
+        },
+        "composition": {
+          "status": "completed",
+          "reason": null
+        },
+        "ordination": {
+          "status": "skipped",
+          "reason": "Ordination is cohort-only. Current mode is 'single' with 1 sample(s)."
+        },
+        "shared": {
+          "status": "skipped",
+          "reason": "Shared taxa module requires >= 2 samples. Current mode is 'single' with 1 sample(s)."
+        },
+        "kreport": {
+          "status": "completed",
+          "reason": null
+        },
+        "faprotax": {
+          "status": "skipped",
+          "reason": "No eligible prokaryotic taxa"
+        }
+      },
+      "taxonomy_provenance": {
+        "mode": "cache_only",
+        "unresolved_count": 76,
+        "conflicts_count": 15,
+        "resolution_source_counts": {
+          "assignment": 35,
+          "assignment_conflict": 0,
+          "ncbi_refresh": 0,
+          "source_cache": 0,
+          "unresolved": 76
+        },
+        "source_cache_updated": false
+      }
+    },
+    {
+      "name": "cohort",
+      "pipeline_exit": 0,
+      "verification_exit": 0,
+      "output": "output\\review-20261011\\ITS_cohort\\output",
+      "manifest_sha256": "9667fdc6cb0700ee7afd91394e6eaf3561aea86c9f8bddde48c073e8d1851fdc",
+      "source_digest_sha256": "c1326697f06f64b55e2dbb89999d924f7e4c28585ccebde13a7b24a15f434a2e",
+      "accounting": {
+        "Biomecon_ITS-kraken2": {
+          "N": 40204,
+          "C": 15559,
+          "U": 24645,
+          "E": 13984,
+          "T": 38629,
+          "D": 1575,
+          "assignments_checked": true,
+          "reconciliation_pass": true
+        },
+        "Knegative_ITS-kraken2": {
+          "N": 26643,
+          "C": 5469,
+          "U": 21174,
+          "E": 4796,
+          "T": 25970,
+          "D": 673,
+          "assignments_checked": true,
+          "reconciliation_pass": true
+        }
+      },
+      "modules": {
+        "qc": {
+          "status": "completed",
+          "reason": null
+        },
+        "alpha": {
+          "status": "completed",
+          "reason": null
+        },
+        "beta": {
+          "status": "completed",
+          "reason": null
+        },
+        "composition": {
+          "status": "completed",
+          "reason": null
+        },
+        "ordination": {
+          "status": "completed",
+          "reason": null
+        },
+        "shared": {
+          "status": "completed",
+          "reason": null
+        },
+        "kreport": {
+          "status": "completed",
+          "reason": null
+        },
+        "faprotax": {
+          "status": "skipped",
+          "reason": "No eligible prokaryotic taxa"
+        }
+      },
+      "taxonomy_provenance": {
+        "mode": "cache_only",
+        "unresolved_count": 135,
+        "conflicts_count": 25,
+        "resolution_source_counts": {
+          "assignment": 79,
+          "assignment_conflict": 0,
+          "ncbi_refresh": 0,
+          "source_cache": 0,
+          "unresolved": 135
+        },
+        "source_cache_updated": false
+      },
+      "nmds": [
+        {
+          "Status": "Skipped",
+          "Reason": "NMDS requires at least 3 non-identical samples; found 2 sample(s), 2 unique profile(s)."
+        }
+      ],
+      "ordination_basis": "one-dimensional PCA/PCoA tables; no two-dimensional plots",
+      "permanova": [
+        {
+          "Status": "Skipped",
+          "Distance": "bray",
+          "Seed": "42",
+          "RequestedPermutations": "999",
+          "StrataColumn": "NA",
+          "DesignStatus": "prerequisites_not_met",
+          "Reason": "PERMANOVA requires non-zero distances, residual degrees of freedom, and at least 2 groups with >= 2 samples each. Found: Unspecified (n=2)"
+        }
+      ]
+    }
+  ]
+}

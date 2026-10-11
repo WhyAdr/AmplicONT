@@ -511,7 +511,7 @@ prepare_heatmap_data <- function(rel_table, samples, metadata = NULL, top_n = 10
 }
 
 draw_taxa_heatmap <- function(prepared, path, mode = if (isTRUE(prepared$cohort)) "cohort" else "single",
-                              rank = unique(prepared$sidecar$Rank)) {
+                              rank = unique(prepared$sidecar$Rank), count_basis = "minimap2_alignments") {
   if (isTRUE(prepared$skipped)) stop("Cannot draw a skipped heatmap.", call. = FALSE)
   matrix_values <- prepared$matrix_plot
   value_range <- range(matrix_values, finite = TRUE)
@@ -559,8 +559,11 @@ draw_taxa_heatmap <- function(prepared, path, mode = if (isTRUE(prepared$cohort)
       } else FALSE,
       cluster_cols = FALSE,
       angle_col = if (identical(mode, "cohort")) 90 else 0,
-      main = sprintf("%s abundance (%s; classified-read denominator; undefined = 0 classified reads)",
-                     tools::toTitleCase(rank), prepared$transform),
+      main = if (identical(count_basis, "bracken_species_estimates")) {
+        sprintf("%s Bracken species estimates (%s; denominator E; undefined = E zero)",
+                tools::toTitleCase(rank), prepared$transform)
+      } else sprintf("%s abundance (%s; classified-read denominator; undefined = 0 classified reads)",
+                      tools::toTitleCase(rank), prepared$transform),
       fontsize = 9
     )
   })
@@ -990,7 +993,7 @@ run_taxa_composition <- function(context) {
            subtitle = sprintf("Relative to %s classified reads", scales::comma(class_totals[s_col])),
            x = NULL, y = "Relative Abundance") + theme_amplicon() + theme(legend.position = "none")
     p_path <- file.path(comp_dir, "04a_phylum_composition.png")
-    save_plot(p_path, p_phylum, width = 7.5, height = 5)
+    save_abundance_plot(context, p_path, p_phylum, width = 7.5, height = 5)
     all_outputs <- c(all_outputs, p_path)
 
     family_counts <- rank_tables[["family"]]$counts %>% select(Taxon, all_of(s_col)) %>%
@@ -1002,7 +1005,7 @@ run_taxa_composition <- function(context) {
       labs(title = sprintf("Top %d Families by Read Count (%s)", top_n, s_col), x = NULL, y = "Read count") +
       theme_amplicon()
     p_path <- file.path(comp_dir, "04b_family_composition.png")
-    save_plot(p_path, p_family, width = 8.5, height = 6)
+    save_abundance_plot(context, p_path, p_family, width = 8.5, height = 6)
     all_outputs <- c(all_outputs, p_path)
 
     genus_counts <- rank_tables[["genus"]]$counts %>% select(Taxon, all_of(s_col)) %>%
@@ -1014,7 +1017,7 @@ run_taxa_composition <- function(context) {
       labs(title = sprintf("Top %d Genera by Read Count (%s)", top_n, s_col), x = NULL, y = "Read count") +
       theme_amplicon()
     p_path <- file.path(comp_dir, "04c_genus_composition.png")
-    save_plot(p_path, p_genus, width = 8.5, height = 6)
+    save_abundance_plot(context, p_path, p_genus, width = 8.5, height = 6)
     all_outputs <- c(all_outputs, p_path)
 
     species_rel <- rank_tables[["species"]]$rel %>% select(Taxon, all_of(s_col)) %>%
@@ -1027,7 +1030,7 @@ run_taxa_composition <- function(context) {
            y = "Relative Abundance (Classified reads)") + theme_amplicon() +
       theme(axis.text.y = element_text(face = "italic"))
     p_path <- file.path(comp_dir, "04d_species_composition.png")
-    save_plot(p_path, p_species, width = 9, height = 6)
+    save_abundance_plot(context, p_path, p_species, width = 9, height = 6)
     all_outputs <- c(all_outputs, p_path)
   } else if (length(samples) == 1L) {
     legacy_skip <- data.frame(
@@ -1094,7 +1097,7 @@ run_taxa_composition <- function(context) {
     plot <- build_stacked_taxa_plot(display_long, colors, sample_order, group_order,
                                     single = length(samples) == 1L, rank = rk)
     stacked_png <- file.path(comp_dir, sprintf("04_%s_stacked.png", rk))
-    save_plot(stacked_png, plot, width = if (length(samples) == 1L) 7 else {
+    save_abundance_plot(context, stacked_png, plot, width = if (length(samples) == 1L) 7 else {
       max(10, min(24, 6 + 0.32 * length(samples)))
     }, height = if (length(samples) == 1L) 7 else 8, dpi = 300)
     all_outputs <- c(all_outputs, stacked_png)
@@ -1126,7 +1129,7 @@ run_taxa_composition <- function(context) {
         invalid_groups = unique(group_means$Group[group_means$SamplesUsed == 0L])
       )
       group_png <- file.path(comp_dir, sprintf("04_%s_group_mean_stacked.png", rk))
-      save_plot(group_png, group_plot,
+      save_abundance_plot(context, group_png, group_plot,
                 width = max(7, min(18, 3 + 1.25 * length(group_order))), height = 7, dpi = 300)
       all_outputs <- c(all_outputs, group_png)
     }
@@ -1160,7 +1163,8 @@ run_taxa_composition <- function(context) {
     all_outputs <- c(all_outputs, heatmap_tsv)
     heatmap_png <- file.path(comp_dir, sprintf("04_heatmap_%s.png", rk))
     draw_taxa_heatmap(prepared, heatmap_png,
-                      mode = if (length(samples) > 1L) "cohort" else "single", rank = rk)
+                      mode = if (length(samples) > 1L) "cohort" else "single", rank = rk,
+                      count_basis = context$count_basis %||% "minimap2_alignments")
     all_outputs <- c(all_outputs, heatmap_png)
   }
 
@@ -1174,7 +1178,7 @@ run_taxa_composition <- function(context) {
     labs(title = "All-read Classification Fraction", x = NULL, y = "Fraction of all reads") +
     theme_amplicon() + theme(axis.text.x = element_text(angle = if (length(samples) > 5) 45 else 0, hjust = 1))
   classification_plot <- file.path(comp_dir, "04_classification_fraction.png")
-  save_plot(classification_plot, p_class, width = max(7, min(14, 0.45 * length(samples) + 5)), height = 5)
+  save_abundance_plot(context, classification_plot, p_class, width = max(7, min(14, 0.45 * length(samples) + 5)), height = 5)
   all_outputs <- c(all_outputs, classification_plot)
 
   list(status = "completed", outputs = all_outputs)

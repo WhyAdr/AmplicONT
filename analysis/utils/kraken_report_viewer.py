@@ -330,6 +330,9 @@ def canonical_json_bytes(payload: dict[str, object]) -> bytes:
 def build_html(payload_bytes: bytes, sample_id: str) -> bytes:
     payload_b64 = base64.b64encode(payload_bytes).decode("ascii")
     safe_title = html.escape(sample_id, quote=True)
+    estimate_note = ""
+    if json.loads(payload_bytes).get("count_basis") == "bracken_species_estimates":
+        estimate_note = "<p>Bracken species estimates: classified counts = E; total denominator T = E + raw unclassified U. Raw Kraken assignments use N = C + U.</p>"
     csp = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
            "img-src data:; connect-src 'none'; font-src 'none'; object-src 'none'; "
            "base-uri 'none'; form-action 'none'")
@@ -414,6 +417,7 @@ ul {{ list-style: none; padding-left: 0; }}
 <label>Rank <select id="rank"></select></label>
 <label><input id="use-clade" type="checkbox" checked> use clade counts</label>
 <a id="download" download="{safe_title}.pavian.json">Download normalized JSON</a></p>
+{estimate_note}
 <details open><summary>Taxonomy tree</summary><ul id="tree"></ul></details>
 <details open><summary>Node table</summary><table><thead><tr><th>Taxon path</th><th>Rank</th><th>TaxID</th><th>Direct</th><th>Clade</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table></details>
 <script id="wf16s-payload" type="application/octet-stream">{payload_b64}</script>
@@ -485,10 +489,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json-out", required=True, type=Path)
     parser.add_argument("--html-out", type=Path)
     parser.add_argument("--expected-total", required=True)
+    parser.add_argument("--count-basis", choices=("minimap2_alignments", "bracken_species_estimates"), default="minimap2_alignments")
     args = parser.parse_args(argv)
     try:
         expected_total = parse_nonnegative_integer(args.expected_total, "expected-total")
         payload = build_payload(args.kreport, args.resolution_tsv, args.sample_id, expected_total)
+        if args.count_basis == "bracken_species_estimates":
+            payload.update(count_basis=args.count_basis, denominator="T",
+                           count_model="Bracken species estimates plus raw Kraken unclassified count",
+                           classified_definition="Bracken species estimate sum E")
         payload_bytes = canonical_json_bytes(payload)
         atomic_write_bytes(args.json_out, payload_bytes)
         if args.html_out is not None:

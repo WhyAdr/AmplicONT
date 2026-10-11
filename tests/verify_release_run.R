@@ -1,7 +1,9 @@
 #!/usr/bin/env Rscript
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) != 1L) stop("Usage: verify_release_run.R OUTPUT_DIR")
+allow_dirty_verification <- "--allow-dirty" %in% args
+args <- args[args != "--allow-dirty"]
+if (length(args) != 1L) stop("Usage: verify_release_run.R OUTPUT_DIR [--allow-dirty]")
 script_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
 if (length(script_arg) != 1L) stop("Could not locate verify_release_run.R.")
 script_path <- normalizePath(sub("^--file=", "", script_arg), winslash = "/", mustWork = TRUE)
@@ -181,8 +183,12 @@ stopifnot(identical(manifest$environment$lock_status, "synchronized"))
 stopifnot(identical(manifest$environment$lockfile, "renv.lock"))
 stopifnot(identical(manifest$environment$lockfile_sha256, expected_lockfile_sha256))
 stopifnot(identical(manifest$git_commit, expected_git_commit))
-stopifnot(identical(manifest$git_dirty, FALSE))
-stopifnot(identical(manifest$cli$allow_dirty, FALSE))
+if (!allow_dirty_verification) {
+  stopifnot(identical(manifest$git_dirty, FALSE))
+  stopifnot(identical(manifest$cli$allow_dirty, FALSE))
+} else {
+  cat("Development verification: dirty source permitted; exact source inventory and artifact checks remain active.\n")
+}
 stopifnot(identical(manifest$cli$allow_unlocked, FALSE))
 stopifnot(identical(manifest$cli$allow_large_workload, FALSE))
 stopifnot(identical(manifest$cli$online_preflight, FALSE))
@@ -192,6 +198,7 @@ stopifnot(identical(manifest$cli$refresh_taxonomy, FALSE))
 stopifnot(identical(manifest$taxonomy$transaction_id, manifest$transaction_id))
 
 classifier <- manifest$upstream_contract$classifier %||% "minimap2"
+release_samples <- array_strings(manifest$samples, "samples")
 stopifnot(classifier %in% c("minimap2", "kraken2"))
 stopifnot(manifest$upstream_contract$database_set %in% c("ncbi_16s_18s_28s_ITS", "ncbi_16s_18s"))
 stopifnot(identical(manifest$upstream_contract$taxonomic_rank, "S"))
@@ -1256,6 +1263,7 @@ if (isTRUE(manifest$cli$pavian)) {
       python,
       c(viewer_verifier, "--kreport", kreport_path, "--resolution-tsv", resolution_file,
         "--sample-id", sample_id, "--json", json_path, html_arg,
+        "--count-basis", manifest$count_basis %||% "minimap2_alignments",
         "--expected-total", as.character(accounting_row$AbundanceTotal)),
       error_on_status = FALSE
     )

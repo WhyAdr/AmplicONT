@@ -392,6 +392,8 @@ def read_abundance_paths(path, tax_column, expected_sha256=None):
 
 
 def read_assignment_taxids(paths, expected_hashes=None, classifier="minimap2"):
+    if classifier not in {"minimap2", "kraken2"}:
+        raise ValueError("Unsupported assignment classifier.")
     lineage_to_taxids = {}
     expected_hashes = expected_hashes or {}
     is_kraken = classifier == "kraken2"
@@ -415,7 +417,7 @@ def read_assignment_taxids(paths, expected_hashes=None, classifier="minimap2"):
 
                 if status not in {"C", "U"}:
                     raise ValueError(f"{path}:{line_number}: invalid status {status!r}.")
-                if not read_id or read_id != read_id.strip() or any(ord(ch) < 32 for ch in read_id):
+                if not read_id or read_id != read_id.strip() or any(ord(ch) < 32 or ord(ch) == 127 for ch in read_id):
                     raise ValueError(f"{path}:{line_number}: unsafe or empty read ID.")
                 if read_id in seen_read_ids:
                     raise ValueError(f"{path}:{line_number}: duplicate read ID {read_id!r}.")
@@ -428,7 +430,7 @@ def read_assignment_taxids(paths, expected_hashes=None, classifier="minimap2"):
                     if read_length <= 0 or read_length > MAX_READ_LENGTH:
                         raise ValueError(f"{path}:{line_number}: read length must satisfy 0 < length <= {MAX_READ_LENGTH}.")
 
-                    if not hits_field or hits_field != hits_field.strip() or any(ord(ch) < 32 for ch in hits_field):
+                    if not hits_field or hits_field != hits_field.strip() or any(ord(ch) < 32 or ord(ch) == 127 for ch in hits_field):
                         raise ValueError(f"{path}:{line_number}: unsafe boundary whitespace or control character.")
                     if "|" in hits_field or "\t" in hits_field:
                         raise ValueError(f"{path}:{line_number}: malformed hit list.")
@@ -436,13 +438,17 @@ def read_assignment_taxids(paths, expected_hashes=None, classifier="minimap2"):
                     if not tokens or any(not t for t in tokens):
                         raise ValueError(f"{path}:{line_number}: malformed hit list.")
                     for token in tokens:
-                        if not re.fullmatch(r"(?:0|[1-9][0-9]*|A):[0-9]+", token):
+                        if not re.fullmatch(r"(?:0|[1-9][0-9]*|A):(?:0|[1-9][0-9]*)", token):
                             raise ValueError(f"{path}:{line_number}: malformed hit token {token!r}.")
+                        hit_taxid, hit_count = token.split(":")
+                        if hit_taxid != "A":
+                            parse_taxid(hit_taxid, f"{path}:{line_number}: hit TaxID")
+                        parse_taxid(hit_count, f"{path}:{line_number}: hit count")
 
-                    if any(field != field.strip() or any(ord(ch) < 32 for ch in field)
+                    if any(field != field.strip() or any(ord(ch) < 32 or ord(ch) == 127 for ch in field)
                            for field in (read_id, taxid_text)):
                         raise ValueError(f"{path}:{line_number}: unsafe boundary whitespace or control character.")
-                    if any(ord(ch) < 32 for ch in lineage):
+                    if any(ord(ch) < 32 or ord(ch) == 127 for ch in lineage):
                         raise ValueError(f"{path}:{line_number}: unsafe boundary whitespace or control character.")
 
                     taxid = parse_taxid(taxid_text, f"{path}:{line_number}")
@@ -464,7 +470,7 @@ def read_assignment_taxids(paths, expected_hashes=None, classifier="minimap2"):
                     read_length = int(length_field.rsplit("|", 1)[-1])
                     if read_length <= 0 or read_length > MAX_READ_LENGTH:
                         raise ValueError(f"{path}:{line_number}: read length must satisfy 0 < length <= {MAX_READ_LENGTH}.")
-                    if any(field != field.strip() or any(ord(ch) < 32 for ch in field)
+                    if any(field != field.strip() or any(ord(ch) < 32 or ord(ch) == 127 for ch in field)
                            for field in (fields[1], taxid_text, lineage)):
                         raise ValueError(f"{path}:{line_number}: unsafe boundary whitespace or control character.")
                     taxid = parse_taxid(taxid_text, f"{path}:{line_number}")

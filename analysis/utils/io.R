@@ -498,7 +498,7 @@ read_abundance_table <- function(path, tax_col = "tax", aggregate_cols = c("tota
     stop(sprintf("Duplicate full lineage detected in abundance table: '%s'", dup), call. = FALSE)
   }
 
-  parsed_lineages <- strsplit(lineages, ";")
+  parsed_lineages <- strsplit(paste0(lineages, ";"), ";", fixed = TRUE)
   field_counts <- vapply(parsed_lineages, length, integer(1))
   if (any(field_counts != 8)) {
     bad_idx <- which(field_counts != 8)[1]
@@ -595,6 +595,7 @@ is_canonical_taxid <- function(x) {
 }
 
 validate_assignment_chunk <- function(lines, sample_id, line_numbers, seen_read_ids, classifier = "minimap2") {
+  if (!classifier %in% c("minimap2", "kraken2")) stop("Unsupported assignment classifier.", call. = FALSE)
   is_kraken <- identical(classifier, "kraken2")
   expected_fields <- if (is_kraken) 6L else 5L
   fields <- strsplit(paste0(lines, "\t"), "\t", fixed = TRUE)
@@ -674,7 +675,11 @@ validate_assignment_chunk <- function(lines, sample_id, line_numbers, seen_read_
     valid_hits <- !grepl("[|\\t]", hits_field) &
       vapply(strsplit(hits_field, " ", fixed = TRUE), function(tokens) {
         if (length(tokens) == 0L || any(!nzchar(tokens))) return(FALSE)
-        all(grepl("^(?:0|[1-9][0-9]*|A):[0-9]+$", tokens, perl = TRUE))
+        if (!all(grepl("^(?:0|[1-9][0-9]*|A):(?:0|[1-9][0-9]*)$", tokens, perl = TRUE))) return(FALSE)
+        parts <- strsplit(tokens, ":", fixed = TRUE)
+        all(vapply(parts, function(p) {
+          (p[1] == "A" || is_canonical_taxid(p[1])) && is_canonical_taxid(p[2])
+        }, logical(1)))
       }, logical(1))
     if (any(!valid_hits)) {
       bad_index <- which(!valid_hits)[1]
@@ -689,7 +694,7 @@ validate_assignment_chunk <- function(lines, sample_id, line_numbers, seen_read_
       c_lines <- line_numbers[c_mask]
       invalid_c_lineage <- vapply(c_lineages, function(lin) {
         if (!is_tsv_safe_identifier(lin)) return(TRUE)
-        parts <- strsplit(lin, "|", fixed = TRUE)[[1]]
+        parts <- strsplit(paste0(lin, "|"), "|", fixed = TRUE)[[1]]
         if (length(parts) != 7L || any(!is_tsv_safe_identifier(parts))) return(TRUE)
         FALSE
       }, logical(1))
@@ -954,7 +959,40 @@ read_metadata_table <- function(path, selected_samples) {
   meta_aligned
 }
 
+validate_cohort_merge_input <- function(cfg) {
+  path <- cfg$input$cohort_merge_manifest
+  if (is.null(path)) return(list())
+  manifest <- jsonlite::fromJSON(path, simplifyVector = FALSE)
+  fail <- function() stop("E_COHORT_PROVENANCE: merged abundance or original source provenance does not match.", call. = FALSE)
+  if (!identical(manifest$manifest_version, "1.0") || !length(manifest$sources)) fail()
+  expected_ab <- manifest$outputs$abundance_table_species.tsv$sha256
+  if (!identical(compute_file_hash(cfg$input$abundance_table), expected_ab)) fail()
+  ids <- vapply(manifest$sources, function(s) s$sample_id, character(1))
+  if (anyDuplicated(ids) || !setequal(ids, unlist(manifest$samples, use.names = FALSE))) fail()
+  records <- list()
+  for (s in manifest$sources) {
+    for (key in c("abundance_table", "params_json", "assignments", "kraken2_report", "bracken_report")) {
+      record <- s[[key]]
+      if (is.null(record)) next
+      if (!is.character(record$path) || length(record$path) != 1L ||
+          !is.character(record$sha256) || length(record$sha256) != 1L ||
+          !grepl("^[0-9a-f]{64}$", record$sha256) ||
+          !identical(compute_file_hash(record$path), record$sha256)) fail()
+      mapping <- switch(key, params_json = cfg$input$params_by_sample,
+                        assignments = cfg$input$assignments, kraken2_report = cfg$input$kraken2_reports,
+                        bracken_report = cfg$input$bracken_reports, NULL)
+      if (key != "abundance_table" && (is.null(mapping[[s$sample_id]]) ||
+          !identical(tolower(normalizePath(mapping[[s$sample_id]], winslash = "/")),
+                     tolower(normalizePath(record$path, winslash = "/"))))) fail()
+      if (key == "abundance_table") records[[s$sample_id]] <- record
+    }
+  }
+  if (!setequal(ids, names(cfg$input$params_by_sample))) fail()
+  records
+}
+
 build_context <- function(cfg) {
+  validate_cohort_merge_input(cfg)
   # 1. Fail closed on the producer contract before parsing classifier-specific files.
   params <- read_upstream_params(cfg$input$params_json)
   upstream_contract <- extract_upstream_contract(params)
@@ -1066,6 +1104,7 @@ build_context <- function(cfg) {
     }
     for (s in selected_samples) {
       s_params <- read_upstream_params(cfg$input$params_by_sample[[s]])
+      if (!identical(s_params$sample, s)) stop(sprintf("Params sample ID does not match mapping key '%s'.", s), call. = FALSE)
       compare_upstream_params(params, s_params, s)
     }
   }
@@ -1100,6 +1139,7 @@ build_context <- function(cfg) {
   bracken_reports_data <- list()
   sample_accounting <- list()
   if (is_kraken) {
+    identity_cache <- jsonlite::fromJSON(cfg$taxonomy$cache, simplifyVector = FALSE)
     for (s in selected_samples) {
       k_rep <- parse_kraken_report(cfg$input$kraken2_reports[[s]], sample_id = s)
       b_rep <- parse_bracken_abundance(cfg$input$bracken_reports[[s]], sample_id = s)
@@ -1107,7 +1147,7 @@ build_context <- function(cfg) {
       bracken_reports_data[[s]] <- b_rep
       match_bracken_to_abundance(b_rep, count_matrix, taxonomy_df,
                                  assignments_df = assignment_data[[s]],
-                                 sample_id = s)
+                                 sample_id = s, taxonomy_cache = identity_cache)
       stat_row <- sample_stats[sample_stats$SampleID == s, , drop = FALSE]
       sample_accounting[[s]] <- compute_kraken_sample_accounting(
         k_rep, b_rep,

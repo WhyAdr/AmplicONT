@@ -348,7 +348,8 @@ make_manifest_revision5_fixture <- function(samples = "S1", modules = c("qc"), c
            sha256 = paste(rep("2", 64L), collapse = ""))
     }))
     manifest$population_accounting <- stats::setNames(lapply(samples, function(s) {
-      list(N = 50L, C = 30L, U = 20L, E = 28L, T = 48L, D = 2L)
+      list(N = 50L, C = 30L, U = 20L, E = 28L, T = 48L, D = 2L,
+           assignments_checked = FALSE, reconciliation_pass = TRUE)
     }), samples)
   } else {
     manifest$count_basis <- "minimap2_alignments"
@@ -401,4 +402,18 @@ test_that("manifest v2 revision 5 validates correctly and rejects invalid states
   m_m2_kraken_rep <- manifest_m2
   m_m2_kraken_rep$inputs$kraken2_reports <- manifest_k2$inputs$kraken2_reports
   expect_error(validate_manifest_v2(m_m2_kraken_rep), "must be null for minimap2")
+})
+
+test_that("revision 5 rejects unsafe settings, overflow and false reconciliation claims", {
+  m <- make_manifest_revision5_fixture(classifier="kraken2")
+  for (bad in list(NA_real_, Inf, c(0,1))) {
+    altered <- m; altered$upstream_contract$kraken2_confidence <- bad
+    expect_error(validate_manifest_v2(altered),"kraken2_confidence")
+  }
+  altered <- m; altered$population_accounting$S1$N <- 9007199254740992
+  expect_error(validate_manifest_v2(altered),"safe integer")
+  altered <- m; altered$population_accounting$S1$reconciliation_pass <- FALSE
+  expect_error(validate_manifest_v2(altered),"flags disagree")
+  altered <- m; altered$population_accounting$S1$assignments_checked <- TRUE
+  expect_error(validate_manifest_v2(altered),"flags disagree")
 })

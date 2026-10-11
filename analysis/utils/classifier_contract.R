@@ -107,6 +107,55 @@ parse_kraken_report <- function(path, sample_id = NULL) {
                  sample_label, direct_num[bad_line], clade_num[bad_line], bad_line), call. = FALSE)
   }
 
+  if (any(!is.finite(pct_num) | pct_num < 0 | pct_num > 100)) {
+    stop(sprintf("Kraken2 report%s has invalid percentage.", sample_label), call. = FALSE)
+  }
+  if (any(!grepl("^(U|[RDKPCOFGS][0-9]*)$", rank_code)) ||
+      any(!is_tsv_safe_identifier(trimws(name_raw))) ||
+      any(grepl("[[:cntrl:]]", name_raw))) {
+    stop(sprintf("Kraken2 report%s has invalid rank or unsafe name.", sample_label), call. = FALSE)
+  }
+  if (any((taxid_str == "0") != (rank_code == "U")) ||
+      any((taxid_str == "1") != (rank_code == "R"))) {
+    stop(sprintf("Kraken2 report%s has invalid root/unclassified identity.", sample_label), call. = FALSE)
+  }
+
+  # Native reports are a preorder tree, with two spaces per level. Clade
+  # counts must reconcile locally, not just at the root.
+  indent <- nchar(name_raw) - nchar(sub("^ *", "", name_raw))
+  if (any(indent %% 2L != 0L) || any(name_raw != sub(" +$", "", name_raw))) {
+    stop(sprintf("Kraken2 report%s has invalid indentation.", sample_label), call. = FALSE)
+  }
+  depth <- indent / 2L
+  parent <- rep(NA_integer_, length(depth))
+  stack <- integer(0)
+  for (i in seq_along(depth)) {
+    if (rank_code[i] == "U") {
+      if (depth[i] != 0L || direct_num[i] != clade_num[i]) {
+        stop("Kraken2 unclassified row must be an isolated direct count.", call. = FALSE)
+      }
+      next
+    }
+    if (rank_code[i] == "R") {
+      if (depth[i] != 0L) stop("Kraken2 root must have depth zero.", call. = FALSE)
+      stack <- i
+      next
+    }
+    if (depth[i] < 1L || depth[i] > length(stack)) {
+      stop(sprintf("Kraken2 report%s has invalid hierarchy at line %d.", sample_label, i), call. = FALSE)
+    }
+    stack <- stack[seq_len(depth[i])]
+    parent[i] <- tail(stack, 1L)
+    stack <- c(stack, i)
+  }
+  for (i in seq_along(depth)) {
+    children <- which(!is.na(parent) & parent == i)
+    expected <- direct_num[i] + sum(clade_num[children])
+    if (expected > 9007199254740991 || expected != clade_num[i]) {
+      stop(sprintf("Kraken2 report%s clade accounting mismatch at line %d.", sample_label, i), call. = FALSE)
+    }
+  }
+
   # Locate unclassified and root rows
   u_idx <- which(rank_code == "U" & taxid_str == "0")
   if (length(u_idx) == 0L) {
@@ -129,6 +178,13 @@ parse_kraken_report <- function(path, sample_id = NULL) {
   }
 
   raw_total <- raw_c + raw_u
+  if (raw_total > 9007199254740991 || sum(direct_num) > 9007199254740991) {
+    stop("Kraken2 total exceeds max safe integer.", call. = FALSE)
+  }
+  expected_pct <- if (raw_total == 0) rep(0, length(pct_num)) else 100 * clade_num / raw_total
+  if (any(abs(pct_num - expected_pct) > 0.005000001)) {
+    stop(sprintf("Kraken2 report%s percentage disagrees with clade count and total.", sample_label), call. = FALSE)
+  }
 
   # Direct counts dictionary
   direct_map <- stats::setNames(direct_num, taxid_str)
@@ -202,11 +258,17 @@ parse_bracken_abundance <- function(path, sample_id = NULL) {
     ), call. = FALSE)
   }
 
-  df <- read.delim(path, header = TRUE, sep = "\t", check.names = FALSE, stringsAsFactors = FALSE)
+  body <- readLines(path, warn = FALSE)[-1L]
+  if (length(body) && any(lengths(strsplit(paste0(body, "\t"), "\t", fixed = TRUE)) != 7L)) {
+    stop(sprintf("Bracken report%s requires exactly 7 fields per data row.", sample_label), call. = FALSE)
+  }
+  df <- read.delim(path, header = TRUE, sep = "\t", check.names = FALSE,
+                   stringsAsFactors = FALSE, colClasses = "character", quote = "", comment.char = "", na.strings = NULL)
   if (nrow(df) == 0L) {
     return(list(
       species_estimate_sum = 0,
       rows = df,
+      df = df,
       taxid_to_est = stats::setNames(numeric(0), character(0)),
       taxid_to_name = stats::setNames(character(0), character(0)),
       path = path,
@@ -231,6 +293,9 @@ parse_bracken_abundance <- function(path, sample_id = NULL) {
     stop(sprintf("Bracken report%s has taxonomy_lvl '%s' at data row %d; expected species rank 'S'.",
                  sample_label, df$taxonomy_lvl[bad_line], bad_line), call. = FALSE)
   }
+  if (any(!is_tsv_safe_identifier(df$name))) {
+    stop(sprintf("Bracken report%s contains unsafe names.", sample_label), call. = FALSE)
+  }
 
   count_cols <- c("kraken_assigned_reads", "added_reads", "new_est_reads")
   for (col in count_cols) {
@@ -242,6 +307,14 @@ parse_bracken_abundance <- function(path, sample_id = NULL) {
                    sample_label, col), call. = FALSE)
     }
     df[[col]] <- vals
+  }
+  fractions <- suppressWarnings(as.numeric(df$fraction_total_reads))
+  if (any(!is.finite(fractions) | fractions < 0 | fractions > 1)) {
+    stop(sprintf("Bracken report%s contains invalid fractions.", sample_label), call. = FALSE)
+  }
+  df$fraction_total_reads <- fractions
+  if (any(df$kraken_assigned_reads + df$added_reads != df$new_est_reads)) {
+    stop(sprintf("Bracken report%s estimate must equal assigned + added reads.", sample_label), call. = FALSE)
   }
 
   est_sum <- sum(df$new_est_reads)
@@ -319,7 +392,9 @@ match_abundance_to_assignment_lineage <- function(abundance_lineage, assignment_
     ab_r <- ab_7[i]
     as_r <- as_parts[i]
     if (identical(ab_r, as_r)) next
-    if (identical(ab_r, normalize_placeholder_rank(as_r))) next
+    if (RANKS_7_KRAKEN[i] %in% c("phylum", "class", "order", "family", "genus") &&
+        endsWith(as_r, paste0(" ", RANKS_7_KRAKEN[i])) &&
+        identical(ab_r, normalize_placeholder_rank(as_r))) next
     return(FALSE)
   }
   TRUE
@@ -331,11 +406,16 @@ match_abundance_to_assignment_lineage <- function(abundance_lineage, assignment_
 
 match_bracken_to_abundance <- function(bracken_data, count_matrix, taxonomy_df,
                                        assignments_df = NULL, taxid_map = NULL,
-                                       sample_id = NULL) {
+                                       sample_id = NULL, taxonomy_cache = NULL) {
   sample_label <- if (!is.null(sample_id)) sprintf(" for sample '%s'", sample_id) else ""
 
   if (is.null(taxid_map) && !is.null(assignments_df)) {
-    taxid_map <- build_taxid_lineage_map_from_assignments(assignments_df)$taxid_to_lineage
+    evidence <- build_taxid_lineage_map_from_assignments(assignments_df)
+    if (length(evidence$conflicts)) {
+      stop(sprintf("Conflicting assignment lineages%s for TaxID '%s'.", sample_label,
+                   names(evidence$conflicts)[1]), call. = FALSE)
+    }
+    taxid_map <- evidence$taxid_to_lineage
   }
   if (is.null(taxid_map)) {
     taxid_map <- character(0)
@@ -370,11 +450,14 @@ match_bracken_to_abundance <- function(bracken_data, count_matrix, taxonomy_df,
     # Resolve assignment lineage for this TaxID
     as_lineage <- if (!is.null(taxid_map) && tid %in% names(taxid_map)) taxid_map[[tid]] else NULL
     if (is.null(as_lineage) || !nzchar(as_lineage)) {
-      # When assignments are absent or TaxID not in assignments,
-      # attempt exact species match in taxonomy_df if unique
-      matching_idx <- which(taxonomy_df$species == b_name & !unclass_mask)
-      if (length(matching_idx) == 1L) {
-        matched_path <- taxonomy_df$TaxonPath[matching_idx]
+      # A species name alone cannot establish TaxID identity. A full-path
+      # cache entry can, including the kingdom that assignments omit.
+      cache_paths <- names(taxonomy_cache)[vapply(taxonomy_cache, function(value) {
+        length(value) == 1L && !is.na(value) && identical(as.character(value), tid)
+      }, logical(1))]
+      matching_paths <- intersect(cache_paths, positive_paths)
+      if (length(matching_paths) == 1L) {
+        matched_path <- matching_paths[1]
       } else {
         stop(sprintf(
           "Bracken row TaxID '%s' ('%s')%s cannot be resolved to an abundance row without assignment or taxonomy evidence.",
@@ -547,7 +630,7 @@ compute_kraken_sample_accounting <- function(kraken_report, bracken_report,
 
 compare_upstream_params <- function(rep_params, sample_params, sample_id) {
   check_fields <- c("classifier", "database_set", "taxonomic_rank", "min_len", "max_len",
-                    "min_read_qual", "abundance_threshold")
+                    "min_read_qual", "abundance_threshold", "exclude_host")
   classifier <- rep_params$classifier
   if (identical(classifier, "minimap2")) {
     check_fields <- c(check_fields, "min_percent_identity", "min_ref_coverage")
