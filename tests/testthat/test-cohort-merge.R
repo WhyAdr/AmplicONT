@@ -129,6 +129,22 @@ test_that("merge_wf16s_cohort rejects output directory overlapping with input", 
   )
 })
 
+test_that("merge destinations resolve existing ancestors before overlap checks", {
+  root <- tempfile("cohort_destination_")
+  dir.create(root)
+  bundle1 <- make_synthetic_sample_bundle(file.path(root, "s1"), "Sample_1", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+  bundle2 <- make_synthetic_sample_bundle(file.path(root, "s2"), "Sample_2", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
+  destination <- file.path(bundle1, "missing", "nested_out")
+  if (.Platform$OS.type == "windows") {
+    destination <- gsub("/", "\\\\", file.path(shortPathName(bundle1), "missing", "nested_out"))
+  }
+  expect_identical(canonicalize_merge_destination(destination),
+                   file.path(normalizePath(bundle1, winslash = "/"), "missing", "nested_out"))
+  expect_error(merge_wf16s_cohort(c(bundle1, bundle2), destination, validate_only = TRUE),
+               "E_COHORT_OUTPUT_OVERLAP")
+  expect_false(dir.exists(file.path(bundle1, "missing")))
+})
+
 test_that("merge_wf16s_cohort rejects colliding sample IDs", {
   root <- tempfile("cohort_test_same_sample_")
   dir.create(root)

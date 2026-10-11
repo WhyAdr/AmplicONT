@@ -40,6 +40,18 @@ get_merge_script_dir <- function() {
   normalizePath(file.path(getwd(), "analysis", "utils"), winslash = "/")
 }
 
+canonicalize_merge_destination <- function(path) {
+  # normalizePath() can leave a nonexistent Windows path unchanged, including
+  # backslashes and short-name ancestors. Resolve the existing ancestor first.
+  path <- gsub("\\\\", "/", path)
+  if (file.exists(path) || dir.exists(path)) {
+    return(normalizePath(path, winslash = "/", mustWork = TRUE))
+  }
+  parent <- dirname(path)
+  if (identical(parent, path)) stop("E_COHORT_DESTINATION_INVALID: cannot resolve destination.", call. = FALSE)
+  file.path(canonicalize_merge_destination(parent), basename(path))
+}
+
 locate_producer_output <- function(input_path) {
   if (!dir.exists(input_path)) {
     stop(sprintf("E_COHORT_INPUT_NOT_FOUND: input directory '%s' does not exist.", input_path), call. = FALSE)
@@ -237,7 +249,7 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
   }
 
   # 2. Guard against output directory overlap
-  norm_dest <- normalizePath(output_dir, winslash = "/", mustWork = FALSE)
+  norm_dest <- canonicalize_merge_destination(output_dir)
   for (r_root in unique(c(resolved_roots, normalizePath(input_dirs, winslash = "/")))) {
     if (identical(tolower(norm_dest), tolower(r_root)) ||
         startsWith(tolower(norm_dest), paste0(tolower(r_root), "/")) ||
@@ -584,7 +596,7 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
   }
 
   # 12. Atomic staging and publication
-  norm_dest <- normalizePath(output_dir, winslash = "/", mustWork = FALSE)
+  norm_dest <- canonicalize_merge_destination(output_dir)
   if (dir.exists(norm_dest) && !isTRUE(overwrite)) {
     stop(sprintf("E_COHORT_DESTINATION_EXISTS: destination directory '%s' already exists; pass --overwrite to replace.",
                  output_dir), call. = FALSE)
