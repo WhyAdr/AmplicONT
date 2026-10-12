@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Recover new cohort transactions interrupted before stage creation or after stage
+  cleanup, while preserving unexpected destination, stage, and backup occupants.
+- Validate large-count alpha rarefaction skips independently in the release gate,
+  including mixed eligible samples and phylogenetic outputs, without relaxing
+  full-depth metric or eligible-output requirements.
+
 ## [0.5.0] - 2026-10-11
 
 ### Added

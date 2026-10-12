@@ -273,6 +273,19 @@ recover_cohort_publication <- function(destination) {
     cohort_path_matches_snapshot(journal$stage, new_snapshot, TRUE)
   allowed <- vapply(journal$allowed_stage_basenames, as.character, character(1))
 
+  # The prepared journal precedes mkdir, and can also outlive stage cleanup.
+  # Only forget this empty transaction when no path has an unexpected occupant.
+  path_occupied <- function(path) {
+    link <- Sys.readlink(path)
+    file.exists(path) || dir.exists(path) ||
+      (length(link) == 1L && !is.na(link) && nzchar(link))
+  }
+  if (!journal$had_prior && identical(journal$phase, "prepared") &&
+      !any(vapply(c(canonical, journal$stage, journal$backup), path_occupied, logical(1)))) {
+    remove_cohort_journal_checked(journal_path)
+    return(invisible(TRUE))
+  }
+
   if (final_new) {
     if (backup_exists) {
       if (!backup_old) stop(sprintf(
@@ -323,6 +336,7 @@ recover_cohort_publication <- function(destination) {
     return(invisible(TRUE))
   }
   if (!isTRUE(journal$had_prior) && !dir.exists(canonical) && !file.exists(canonical) &&
+      !path_occupied(canonical) && !path_occupied(journal$backup) &&
       !stage_new && stage_exists && identical(journal$phase, "prepared")) {
     remove_cohort_directory_checked(journal$stage, allowed_names = allowed)
     remove_cohort_journal_checked(journal_path)
@@ -926,12 +940,13 @@ merge_wf16s_cohort <- function(input_dirs, output_dir, project_name = NULL,
     allowed_stage_basenames = as.list(stage_allowed_names), phase = "prepared"
   )
   write_cohort_publication_journal(tx_paths$journal, journal)
+  run_publication_hook <- function(phase) {
+    if (is.function(publication_hook)) publication_hook(phase, norm_dest, stage_dir, backup_dir)
+  }
+  run_publication_hook("after_prepare_journal")
   if (!dir.create(stage_dir, recursive = FALSE, showWarnings = FALSE)) {
     stop(sprintf("E_COHORT_STAGE_FAILED: could not create transaction stage '%s'.", stage_dir),
          call. = FALSE)
-  }
-  run_publication_hook <- function(phase) {
-    if (is.function(publication_hook)) publication_hook(phase, norm_dest, stage_dir, backup_dir)
   }
 
   # Write abundance_table_species.tsv

@@ -608,3 +608,83 @@ test_that("cohort transaction paths fit conservative Windows path limits", {
   artifact <- file.path(paths$stage, "abundance_table_species.tsv")
   expect_lt(nchar(artifact), 240L)
 })
+
+test_that("a fresh prepared journal recovers before mkdir and after interrupted cleanup", {
+  repo_root <- normalizePath(file.path("..", ".."), winslash = "/", mustWork = TRUE)
+  root <- tempfile("cohort_empty_prepared_")
+  dir.create(root)
+  a <- make_synthetic_sample_bundle(file.path(root, "a"), "A", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+  b <- make_synthetic_sample_bundle(file.path(root, "b"), "B", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
+  output <- file.path(root, "merged")
+  child <- run_cohort_merge_child(repo_root, c(a, b), output, "after_prepare_journal")
+  expect_equal(child$status, 86L)
+  journal_path <- cohort_transaction_paths(output)$journal
+  journal <- jsonlite::fromJSON(journal_path, simplifyVector = FALSE)
+  expect_false(dir.exists(journal$stage))
+  expect_true(recover_cohort_publication(output))
+  expect_false(file.exists(journal_path))
+
+  # Reproduce a failure between successful stage removal and journal removal.
+  write_cohort_publication_journal(journal_path, journal)
+  dir.create(journal$stage)
+  writeLines("partial", file.path(journal$stage, "metadata.tsv"))
+  env <- new.env(parent = environment(recover_cohort_publication))
+  env$recover <- recover_cohort_publication
+  environment(env$recover) <- env
+  env$remove_cohort_journal_checked <- function(path) stop("injected journal removal interruption")
+  expect_error(env$recover(output), "injected journal removal interruption")
+  expect_false(dir.exists(journal$stage))
+  expect_true(file.exists(journal_path))
+  expect_true(recover_cohort_publication(output))
+  expect_false(file.exists(journal_path))
+  expect_identical(merge_wf16s_cohort(c(a, b), output)$status, "merged")
+})
+
+test_that("failed stage mkdir is retryable without manual journal removal", {
+  root <- tempfile("cohort_mkdir_failure_")
+  dir.create(root)
+  a <- make_synthetic_sample_bundle(file.path(root, "a"), "A", c("Eukaryota;Fungi;P;C;O;F;G;TaxonA" = 10))
+  b <- make_synthetic_sample_bundle(file.path(root, "b"), "B", c("Eukaryota;Fungi;P;C;O;F;G;TaxonB" = 20))
+  output <- file.path(root, "merged")
+  env <- new.env(parent = environment(merge_wf16s_cohort))
+  env$merge <- merge_wf16s_cohort
+  environment(env$merge) <- env
+  env$dir.create <- function(path, ...) {
+    if (startsWith(basename(path), ".wf16s-cohort-stage-")) return(FALSE)
+    base::dir.create(path, ...)
+  }
+  expect_error(env$merge(c(a, b), output), "E_COHORT_STAGE_FAILED")
+  expect_false(file.exists(cohort_transaction_paths(output)$journal))
+  expect_identical(merge_wf16s_cohort(c(a, b), output)$status, "merged")
+})
+
+test_that("empty prepared recovery retains unexpected occupants and later phases", {
+  root <- tempfile("cohort_prepared_occupants_")
+  dir.create(root)
+  output <- file.path(root, "merged")
+  transaction_id <- new_cohort_transaction_id()
+  paths <- cohort_transaction_paths(output, transaction_id)
+  journal <- list(journal_schema_version = 1L, transaction_id = transaction_id,
+    destination = canonicalize_merge_destination(output), stage = paths$stage,
+    backup = paths$backup, had_prior = FALSE, prior_snapshot = NULL,
+    expected_new_snapshot = NULL, allowed_stage_basenames = list("metadata.tsv"), phase = "prepared")
+  for (target in c(output, paths$stage, paths$backup)) {
+    for (kind in c("file", "directory")) {
+      write_cohort_publication_journal(paths$journal, journal)
+      if (kind == "file") writeLines("preserve", target) else {
+        dir.create(target)
+        writeLines("preserve", file.path(target, "user.txt"))
+      }
+      expect_error(recover_cohort_publication(output), "E_COHORT_RECOVERY_REQUIRED")
+      expect_true(file.exists(paths$journal))
+      expect_identical(readLines(if (kind == "file") target else file.path(target, "user.txt")), "preserve")
+      unlink(target, recursive = TRUE)
+    }
+  }
+  for (phase in c("ready_to_publish", "prior_moved", "stage_published")) {
+    journal$phase <- phase
+    write_cohort_publication_journal(paths$journal, journal)
+    expect_error(recover_cohort_publication(output), "E_COHORT_RECOVERY_REQUIRED")
+    expect_true(file.exists(paths$journal))
+  }
+})
