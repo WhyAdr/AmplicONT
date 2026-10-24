@@ -435,6 +435,9 @@ test_that("FAPROTAX2 is opt-in and has validated, path-resolved defaults", {
 
   root <- tempfile("faprotax2 config paths ")
   dir.create(root)
+  # Resolve the existing ancestor before appending missing assets: Windows CI
+  # tempdir() can use an 8.3 alias while load_config() resolves the long name.
+  root <- normalizePath(root, winslash = "/", mustWork = TRUE)
   config_path <- file.path(root, "config.yml")
   yaml::write_yaml(list(faprotax2 = list(
     mode = "taxonomy", mapper_path = "mapper path/faprotax.R",
