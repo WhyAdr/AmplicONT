@@ -97,6 +97,38 @@ Local logs are retained under ignored `output/faprotax2-runtime/` and
 `output/faprotax2-audit/`. Synthetic input hashes may be published in the proof;
 private sequences, feature tables, inventory paths and raw results remain local.
 
+## Final clean-source usage check
+
+The README's default setup, validate-only, taxonomy run and independent verifier
+commands passed at candidate commit
+`0a422aaafe7c6da88455276288f13867335e1e47`. The setup rerun installed no packages.
+Validate-only reported zero filesystem mutations. The completed taxonomy-only
+run took 70.671 seconds, owned 16 files including the 13 FAPROTAX2 artifacts,
+and recorded `git_dirty: false`, `locked: true` and manifest revision 6.
+The independent verifier passed the one-feature, 101-function, one-sample
+output. No development bypass was used.
+
+A separate legacy-only run also completed from that same clean candidate using
+the same public fixture config, in 0.8705 seconds with eight owned files
+including the unchanged five legacy artifacts. Its manifest also records a
+clean source tree, synchronized lock and revision 6. The new output roots are
+`output/faprotax2-taxonomy-repro` and `output/faprotax-legacy-repro`.
+
+After the README's environment/setup block, the independently exercised modes
+can be invoked from native PowerShell as follows (choose new output roots when
+rerunning):
+
+```powershell
+Rscript --vanilla analysis/00_run_pipeline.R `
+  --config tests/fixtures/faprotax2/config.taxonomy.yml `
+  --modules faprotax2 --output-dir 'output/faprotax2-taxonomy-repro'
+Rscript --vanilla tests/verify_faprotax2_run.R 'output/faprotax2-taxonomy-repro'
+
+Rscript --vanilla analysis/00_run_pipeline.R `
+  --config tests/fixtures/faprotax2/config.taxonomy.yml `
+  --modules faprotax --output-dir 'output/faprotax-legacy-repro'
+```
+
 ## Regression and CI scope
 
 The complete native R suite passed 232 tests and 1,494 expectations, with 14
