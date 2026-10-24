@@ -302,9 +302,8 @@ validate_prior_output <- function(final_root, overwrite) {
                             full.names = FALSE)
   prior_files <- prior_files[!dir.exists(file.path(final_root, prior_files))]
   current_contract <- identical(prior$schema_version, 2L) &&
-    (identical(prior$schema_revision, 1L) || identical(prior$schema_revision, 2L) ||
-     identical(prior$schema_revision, 3L) || identical(prior$schema_revision, 4L) ||
-     identical(prior$schema_revision, 5L)) &&
+    length(prior$schema_revision) == 1L &&
+    isTRUE(prior$schema_revision %in% c(1L, 2L, 3L, 4L, 5L, 6L)) &&
     !is.null(prior$owned_outputs) &&
     is.list(prior$environment) && !is.null(prior$environment$library_paths) &&
     !is.null(prior$environment$package_locations)
@@ -812,7 +811,7 @@ manifest_is_valid_run <- function(dir_path) {
     identical(manifest$run_status, "completed") &&
     identical(manifest$schema_version, 2L) &&
     length(manifest$schema_revision) == 1L &&
-    isTRUE(manifest$schema_revision %in% c(1L, 2L, 3L, 4L, 5L))
+    isTRUE(manifest$schema_revision %in% c(1L, 2L, 3L, 4L, 5L, 6L))
   if (!isTRUE(valid_identity)) return(FALSE)
   isTRUE(tryCatch({
     validate_manifest_v2(manifest, physical_root = dir_path)

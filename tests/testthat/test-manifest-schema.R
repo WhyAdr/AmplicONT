@@ -417,3 +417,26 @@ test_that("revision 5 rejects unsafe settings, overflow and false reconciliation
   altered <- m; altered$population_accounting$S1$assignments_checked <- TRUE
   expect_error(validate_manifest_v2(altered),"flags disagree")
 })
+
+test_that("revision 6 adds an exact module while retaining historical source contracts", {
+  old <- make_manifest_revision5_fixture()
+  expect_no_error(validate_manifest_v2(old))
+  current <- old
+  current$schema_revision <- 6L
+  current$modules$faprotax2 <- manifest_module_record(new_not_run_module_record("Not requested"))
+  expect_no_error(validate_manifest_v2(current))
+  missing <- current
+  missing$modules$faprotax2 <- NULL
+  expect_error(validate_manifest_v2(missing), "module keys")
+  extra <- current
+  extra$modules$unknown <- extra$modules$faprotax2
+  expect_error(validate_manifest_v2(extra), "module keys")
+  altered <- current
+  altered$count_basis <- "invented_counts"
+  expect_error(validate_manifest_v2(altered), "count_basis")
+  altered <- current
+  altered$upstream_contract$classifier <- "invented_classifier"
+  expect_error(validate_manifest_v2(altered), "classifier")
+  old$modules$faprotax2 <- current$modules$faprotax2
+  expect_error(validate_manifest_v2(old), "module keys")
+})

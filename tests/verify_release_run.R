@@ -170,9 +170,9 @@ assert_exact_sample_order <- function(data, expected_order, column, label) {
 stopifnot(identical(manifest$run_status, "completed"))
 stopifnot(manifest$mode %in% c("single", "cohort"))
 stopifnot(identical(manifest$schema_version, 2L))
-stopifnot(manifest$schema_revision %in% c(3L, 4L, 5L))
+stopifnot(manifest$schema_revision %in% c(3L, 4L, 5L, 6L))
 is_manifest_revision4 <- manifest$schema_revision >= 4L
-is_manifest_revision5 <- identical(manifest$schema_revision, 5L)
+is_manifest_revision5 <- manifest$schema_revision >= 5L
 stopifnot(is.character(manifest$transaction_id), length(manifest$transaction_id) == 1L,
           grepl("^tx-[0-9a-f]{64}$", manifest$transaction_id))
 stopifnot(identical(manifest$config_schema_version, 1L))
@@ -228,6 +228,7 @@ assert_source_inventory_matches(manifest, independent_sources)
 # Expected module set completeness and status verification.  The registry is
 # fixed so a release manifest cannot silently omit a maintained module.
 ALL_MODULES <- c("qc", "alpha", "beta", "composition", "ordination", "shared", "kreport", "faprotax")
+if (identical(manifest$schema_revision, 6L)) ALL_MODULES <- c(ALL_MODULES, "faprotax2")
 expected_modules <- array_strings(manifest$cli$modules, "cli.modules")
 if (length(expected_modules) == 0L) expected_modules <- ALL_MODULES
 invisible(require_json_array(manifest$samples, "samples"))

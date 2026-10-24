@@ -685,11 +685,12 @@ validate_manifest_v2_revision_core <- function(manifest, physical_root = NULL,
     }
   }
 
-  # Modules validation
+  # Modules validation. Revisions 1-5 retain their historical eight-module set.
   if (!is.list(manifest$modules) || is.null(names(manifest$modules)) || anyDuplicated(names(manifest$modules))) {
     manifest_fail("modules", "expected a uniquely named object.")
   }
   registry <- c("qc", "alpha", "beta", "composition", "ordination", "shared", "kreport", "faprotax")
+  if (identical(revision, 6L)) registry <- c(registry, "faprotax2")
   if (!identical(sort(names(manifest$modules)), sort(registry))) {
     manifest_fail("modules", "module keys must exactly match the maintained registry.")
   }
@@ -976,10 +977,21 @@ validate_manifest_v2_revision5 <- function(manifest, physical_root = NULL) {
                                      require_revision5 = TRUE)
 }
 
+# Taxonomy integration only: revision 6 retains every revision-5 source/count
+# contract check and adds the separately enumerated optional module. Historical
+# revisions still dispatch to their original validators and original registries.
+validate_manifest_v2_revision6 <- function(manifest, physical_root = NULL) {
+  validate_manifest_v2_revision_core(manifest, physical_root = physical_root,
+                                     revision = 6L, require_revision3 = TRUE,
+                                     require_revision4 = TRUE, require_revision5 = TRUE)
+}
+
 validate_manifest_v2 <- function(manifest, physical_root = NULL) {
   if (!is.list(manifest) || is.null(names(manifest))) manifest_fail("<root>", "expected an object.")
   rev <- manifest$schema_revision
-  if (identical(rev, 5L)) {
+  if (identical(rev, 6L)) {
+    validate_manifest_v2_revision6(manifest, physical_root = physical_root)
+  } else if (identical(rev, 5L)) {
     validate_manifest_v2_revision5(manifest, physical_root = physical_root)
   } else if (identical(rev, 4L)) {
     validate_manifest_v2_revision4(manifest, physical_root = physical_root)
