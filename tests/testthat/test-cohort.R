@@ -268,7 +268,10 @@ test_that("Pipeline PERMANOVA and betadisper use every row of the reported desig
   direct_dispersion <- vegan::permutest(
     vegan::betadisper(distance, context$metadata$Group), permutations = design$matrix
   )
-  reported_dispersion <- read.delim(file.path(beta_dir, "betadisper.tsv"), check.names = FALSE)
+  # The zero-dispersion fixture can produce an undefined p-value on Linux.
+  # Preserve the numeric column type even when its only value is missing.
+  reported_dispersion <- read.delim(file.path(beta_dir, "betadisper.tsv"),
+                                    check.names = FALSE, colClasses = c(P_Value = "numeric"))
   expect_equal(reported_dispersion$EffectivePermutations, nrow(design$matrix))
   expect_equal(reported_dispersion$P_Value, direct_dispersion$tab$`Pr(>F)`[1], tolerance = 1e-12)
 })
