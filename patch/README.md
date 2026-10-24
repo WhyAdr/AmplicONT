@@ -5,6 +5,13 @@ focused on pipeline configuration and project metadata. Historical plans describ
 their original scope; the current implementation and usage are documented in the
 [project README](../README.md).
 
+## FAPROTAX2 migration
+
+- [Native Windows assessment and legacy baseline](faprotax2-migration-assessment.md)
+- [Official mapper contract and provenance](faprotax2-upstream-contract.md)
+- [Architecture integration audit](faprotax2-architecture-assessment.md)
+- [Representative 16S input assessment](faprotax2-input-assessment.md)
+
 ## Version 0.5.0: Kraken2 and Bracken
 
 - [Original integration draft](kraken2-support-implement.md)

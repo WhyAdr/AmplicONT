@@ -32,6 +32,9 @@
 /wf-16s_Biomecon-ITS-kraken2/
 /wf-16s_Knegative-ITS-kraken2/
 
+# Private representative sequences and producer feature tables for local validation.
+/other-references-inputs/
+
 # R & Python temporary files
 .Rhistory
 .RData
