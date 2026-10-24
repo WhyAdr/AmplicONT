@@ -1044,6 +1044,13 @@ if (identical(manifest$project_name, "AmbarAyunda_16S_Amplicon")) {
     }
     unexpected_warnings <- unexpected_warnings[unexpected_warnings != expected_conflict_warning]
   }
+  expected_faprotax2_warning <- "FAPROTAX2 predicts overlapping phenotypes from taxonomic placement; unknown lineages may receive broad fallback predictions."
+  faprotax2_completed <- "faprotax2" %in% expected_modules &&
+    identical(manifest$modules$faprotax2$status, "completed")
+  if (faprotax2_completed) {
+    stopifnot(sum(unexpected_warnings == expected_faprotax2_warning) == 1L)
+    unexpected_warnings <- unexpected_warnings[unexpected_warnings != expected_faprotax2_warning]
+  }
   if (length(unexpected_warnings) > 0L) {
     stop("Unexpected run warning(s): ", paste(unexpected_warnings, collapse = "; "))
   }
@@ -1054,6 +1061,10 @@ if (identical(manifest$project_name, "AmbarAyunda_16S_Amplicon")) {
         stop("Expected exactly one canonical taxonomy-conflict kreport warning.")
       }
       module_warnings <- module_warnings[module_warnings != expected_conflict_warning]
+    }
+    if (identical(mod, "faprotax2") && faprotax2_completed) {
+      stopifnot(sum(module_warnings == expected_faprotax2_warning) == 1L)
+      module_warnings <- module_warnings[module_warnings != expected_faprotax2_warning]
     }
     if (length(module_warnings) > 0L) {
       stop(sprintf("Unexpected module warning(s) in '%s': %s", mod, paste(module_warnings, collapse = "; ")))
@@ -1157,7 +1168,7 @@ if (identical(manifest$project_name, "AmbarAyunda_16S_Amplicon")) {
   stopifnot(composition$ClassifiedReads == 80556L)
   stopifnot(composition$UnclassifiedReads == 33500L)
 
-} else if (identical(manifest$project_name, "synthetic_minimap2_bamstats")) {
+} else if (manifest$project_name %in% c("synthetic_minimap2_bamstats", "faprotax2_taxonomy_contract")) {
   stopifnot(identical(manifest$upstream_contract$wf_agent, "epi2melabs/wf-16s"))
   stopifnot(identical(as.integer(manifest$taxonomy$unresolved_count), 0L))
   stopifnot(identical(as.integer(manifest$taxonomy$conflicts_count), 0L))

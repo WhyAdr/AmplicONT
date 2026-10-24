@@ -12,6 +12,7 @@ their original scope; the current implementation and usage are documented in the
 - [Architecture integration audit](faprotax2-architecture-assessment.md)
 - [Representative 16S input assessment](faprotax2-input-assessment.md)
 - [Taxonomy proof of concept](faprotax2-poc-results.md)
+- [Production taxonomy integration and native validation](faprotax2-production-validation.md)
 - [Sequence feasibility and native portability trial](faprotax2-sequence-feasibility.md)
 
 ## Version 0.5.0: Kraken2 and Bracken
