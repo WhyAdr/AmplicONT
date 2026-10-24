@@ -1,0 +1,4 @@
+OTU	Rényi_α	Control_β	taxonomy
+feature_neuropaea	30	8	Bacteria;Pseudomonadota;Gammaproteobacteria;Burkholderiales;Nitrosomonadaceae;Nitrosomonas;Nitrosomonas europaea
+feature_aeruginosa	11	23	Bacteria;Pseudomonadota;Gammaproteobacteria;Pseudomonadales;Pseudomonadaceae;Pseudomonas;Pseudomonas aeruginosa PA38182
+feature_subtilis	12	20	Bacteria;Bacillota;Bacilli;Bacillales;Bacillaceae;Bacillus;Bacillus subtilis
