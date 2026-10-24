@@ -311,7 +311,7 @@ rebase_output <- function(cfg, root) {
 cfg <- rebase_output(cfg, stage)
 context$config <- cfg
 
-cat(sprintf("ONT wf-16s post-processing %s | %s | %d sample(s)\n",
+cat(sprintf("AmplicONT %s | %s | %d sample(s)\n",
             pipeline_version, context$mode, length(context$samples)))
 start_time <- Sys.time()
 module_results <- stats::setNames(lapply(names(module_registry), function(name) {
