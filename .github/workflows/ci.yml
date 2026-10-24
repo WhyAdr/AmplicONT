@@ -76,6 +76,14 @@ jobs:
           node --test tests/test_taxonomy_sankey_client.mjs
           python -m unittest -v tests/test_ncbi_taxonomy.py tests/test_check_committed_whitespace.py
 
+      - name: Verify FAPROTAX2 contracts in native Windows PowerShell
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:LC_ALL = 'English_United States.utf8'
+          Rscript tests/run_faprotax2_unit.R
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Validate without filesystem mutation
         shell: bash
         run: |

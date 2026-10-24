@@ -20,7 +20,7 @@ A second single-sample pipeline run used the maintained zero-classified syntheti
 
 ## FAPROTAX2 contract and interpretation
 
-The adapter ran the audited, unmodified FAPROTAX-mapper 2.0 beta script. Its provenance records the official archive SHA-256 and exact hashes for the mapper and six reference assets. These upstream files and mapper-specific libraries are local runtime assets; the repository does not bundle them or download them automatically.
+The adapter ran the audited, unmodified FAPROTAX-mapper 2.0 beta script. Its provenance records the official archive SHA-256 and exact hashes for the mapper and six reference assets. These upstream files and mapper-specific libraries are local runtime assets; the repository does not bundle them, and normal module invocation does not download them. The optional setup helper provisions them explicitly.
 
 The module emits these 13 files under `09_FAPROTAX2/`:
 
@@ -30,7 +30,7 @@ The module emits these 13 files under `09_FAPROTAX2/`:
 
 Function abundance is calculated from binary predicted-presence states and the input taxon counts. NA states contribute zero to that calculation; probabilities are retained as unitless annotations and do not weight abundance. Function assignments overlap, so their summed abundance can exceed the input total and is not normalized to 100%. The coverage table separates total input, excluded input, eligible input, predicted presence, known absence, and unknown-without-presence. Taxonomy translation omits the NCBI kingdom rank, retains the source taxon path, and records the seven mapper ranks.
 
-The synthetic pipeline run had integer counts, as required by the existing pipeline input contract. Separate synthetic matrix tests confirm that fractional arithmetic is preserved rather than rounded; they do not add a fractional-count input contract or verify the mapper's probability-weighted mode. Invalid state/probability combinations are rejected, matrices must match by feature/function/sample IDs and order, and missing or altered pinned assets fail validation. NA is accepted by the adapter's matrix contract, but no NA states occurred in the known-lineage native mapper fixtures, so a positive NA-producing case has not been empirically observed.
+The synthetic pipeline run had integer counts, as required by the existing pipeline input contract. Separate synthetic matrix tests confirm that fractional arithmetic is preserved rather than rounded; they do not add a fractional-count input contract or verify the mapper's probability-weighted mode. Invalid state/probability combinations are rejected, matrices must match by feature/function/sample IDs and order, and missing or altered pinned assets fail validation. The small known-lineage native fixtures did not produce NA states. The later real-taxonomy comparison did produce 298 NA states among 185,436 cells and passed the independent abundance reconstruction; see [`faprotax2-validation-report.md`](faprotax2-validation-report.md).
 
 An earlier native-Windows mapper POC ran the three known-lineage fixture twice without a random seed. The four raw result tables were byte-identical between those two runs. This is a local repeatability observation, not a cross-platform determinism guarantee. More details and hashes are in [`faprotax2-poc-results.md`](faprotax2-poc-results.md).
 

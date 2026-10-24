@@ -4,8 +4,27 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Add the opt-in `faprotax2` taxonomy backend using the hash-pinned official
+  FAPROTAX-mapper 2.0 beta, with separate `09_FAPROTAX2/` outputs, raw model
+  states/probabilities, explicit abundance units, input/reference provenance,
+  native Windows process handling and bounded mapper timeouts.
+- Add manifest revision 6 with the exact nine-module registry while retaining
+  the historical registries and source/count contracts for revisions 1–5.
+- Add independent native mapper proofs, a paired taxonomy-backend validator,
+  an optional Windows runtime bootstrap, and PowerShell CI contract checks.
+- Record the failed native sequence gate after APPLES changed the reference
+  topology; sequence mode stays disabled pending a compatible end-to-end proof.
+
 ### Fixed
 
+- Preserve numeric missing p-values in the Linux dispersion test oracle without
+  changing beta-diversity calculations.
+- Preserve the underlying mapper error when strict staging validation also
+  reports partial files after a failed or timed-out process.
+- Resolve Windows temporary-directory aliases before comparing optional
+  mapper paths in configuration tests.
 - Recover new cohort transactions interrupted before stage creation or after stage
   cleanup, while preserving unexpected destination, stage, and backup occupants.
 - Validate large-count alpha rarefaction skips independently in the release gate,

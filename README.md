@@ -28,6 +28,7 @@ analysis/
 ├── 06_shared_taxa.R         # Core/unique taxa by group prevalence, UpSet plot
 ├── 07_kreport_pavian.R      # Kraken report, Krona/Pavian exports, taxonomy provenance
 ├── 08_faprotax.R            # Opt-in FAPROTAX 1.2.12 taxon-based inference
+├── 09_faprotax2.R           # Opt-in official FAPROTAX-mapper 2.0 taxonomy adapter
 ├── install_packages.R       # Dependency checker & installer (--install)
 ├── utils/merge_wf16s_cohort.R # Standalone multi-bundle cohort merger utility
 ├── utils/classifier_contract.R # Classifier contract validation & population accounting
@@ -287,6 +288,130 @@ original database/software paper: [Louca et al. (2016)](https://doi.org/10.1126/
 The tracked-fixture comparison with the official `collapse_table.py` workflow
 is recorded in [faprotax1.2.12-concordance-review.md](patch/faprotax1.2.12-concordance-review.md);
 the two engines must not be treated as byte-for-byte equivalent.
+
+---
+
+## FAPROTAX2 taxonomy inference (opt-in, unreleased)
+
+`--modules faprotax2` runs the official **FAPROTAX-mapper 2.0 beta** in taxonomy
+mode. The existing `faprotax` backend remains available, and both functional
+backends remain outside the default module selection. The mapper distribution
+includes its own reference tree and model data; **FAPROTAX-db 2.0 alone is not
+that runtime**. The [upstream audit](patch/faprotax2-upstream-contract.md) records
+the official download, license evidence and SHA-256 identities.
+
+The wrapper consumes the existing pipeline abundance contract. It selects
+positive-count Bacteria/Archaea rows, translates the eight NCBI ranks to the
+mapper's seven ranks by omitting the intervening kingdom, and retains the
+original `TaxonPath` and count basis. Internally generated `Taxon_######` IDs
+identify taxonomy rows; they are not representative sequences.
+
+### Native Windows setup and example
+
+Use native Windows R **4.5.3**, Python **3.12**, and the existing synchronized
+`renv` library. The optional bootstrap checks that baseline and provisions
+mapper assets and optional binary packages separately. It preserves the
+baseline library. Run from the repository root in PowerShell:
+
+```powershell
+$env:RENV_CONFIG_AUTOLOADER_ENABLED = 'FALSE'
+$env:R_LIBS = (Resolve-Path 'renv/library/windows/R-4.5/x86_64-w64-mingw32').Path
+$env:LC_ALL = 'English_United States.utf8'
+Rscript --version
+python --version
+Rscript --vanilla tests/setup_faprotax2_windows.R
+if ($LASTEXITCODE -ne 0) { throw 'Optional mapper setup failed' }
+
+Rscript --vanilla analysis/00_run_pipeline.R `
+  --config tests/fixtures/faprotax2/config.taxonomy.yml `
+  --modules faprotax2 `
+  --output-dir 'output/faprotax2-taxonomy-repro' --validate-only
+if ($LASTEXITCODE -ne 0) { throw 'Validation failed' }
+
+Rscript --vanilla analysis/00_run_pipeline.R `
+  --config tests/fixtures/faprotax2/config.taxonomy.yml `
+  --modules faprotax2 `
+  --output-dir 'output/faprotax2-taxonomy-repro'
+if ($LASTEXITCODE -ne 0) { throw 'Taxonomy mapper failed' }
+Rscript --vanilla tests/verify_faprotax2_run.R 'output/faprotax2-taxonomy-repro'
+```
+
+The baseline path above is the standard existing Windows project library;
+resolve and inspect the actual installed library before using an alternative
+path. Setup rejects a missing or mismatched baseline and reuses only
+hash-matched cached downloads. It does not restore the baseline automatically.
+The setup library is an overlay: shared project/R dependencies remain available,
+and each run records their resolved versions, locations and DESCRIPTION hashes.
+Keep result directories separate from mapper, reference and package caches.
+Choose a fresh result directory, or explicitly request `--overwrite` for owned
+results you intend to replace.
+
+For all nine modules, use
+`--modules qc,alpha,beta,composition,ordination,shared,kreport,faprotax,faprotax2`.
+Single-sample comparative analyses retain their structured skips. To compare
+both functional backends on the same input, request `--modules faprotax,faprotax2`
+and run `tests/compare_faprotax_backends.R` on that completed output. Detailed
+comparison evidence must go under a separate ignored `output/` directory.
+
+### Configuration, outputs and units
+
+Add the following block to an existing pipeline config; paths resolve relative
+to that YAML file. The public fixture config supplies a runnable example after
+the optional setup.
+
+```yaml
+faprotax2:
+  mode: taxonomy
+  mapper_path: path/to/FAPROTAX-mapper_v2.0/faprotax.R
+  reference_dir: path/to/FAPROTAX-mapper_v2.0/FAPROTAX_ref_data
+  mapper_library: path/to/optional-mapper-library
+  nthreads: 1
+  timeout_seconds: 600
+  top_n_functions: 20
+```
+
+The adapter pins the audited script and all six reference files, checks optional
+dependencies before output mutation, and invokes Rscript with argument vectors.
+It uses the reference's per-function defaults, `normalize=none` and no probability
+weighting. One thread is the verified default. The pipeline seed is not forwarded
+to the external mapper; two local unseeded fixture repeats were byte-identical,
+which does not guarantee determinism across inputs, platforms or binary builds.
+
+`09_FAPROTAX2/` contains the long function-abundance table, coverage table,
+positive feature/function assignments, top-function PNG and provenance JSON,
+plus the input/identity crosswalk, original mapper matrices/report and process
+stdout/stderr. The raw states are **1 / 0 / NA** for predicted presence / predicted
+absence / unknown; annotation probabilities are unitless. Estimated function
+abundance is `t(states with NA replaced by 0) %*% eligible taxon counts`. Unknown
+states remain visible in the raw tables. Functions overlap and their independent
+abundances can sum above the input total.
+
+Coverage separates eligible/excluded input and taxa with positive function
+states. `KnownAbsenceOnlyAbundance` means rows whose model states are all zero;
+absence is still a prediction. Coverage is not a placement-accuracy measure:
+unrecognized taxonomies can receive broad fallback predictions. With no eligible
+prokaryotes the module writes one structured skip record. Missing software or
+altered pinned references fail preflight.
+
+These phenotype predictions do not establish genes, pathway completeness,
+expression, measured activity or pathogenicity. See the
+[native production validation](patch/faprotax2-production-validation.md) and
+[independent backend comparison](patch/faprotax2-validation-report.md) for exact
+tested commands, results and limits. CI exercises offline adapter contracts and
+real child-process failure handling; the licensed official-mapper integration
+was verified locally rather than added as an automatic online CI download.
+
+### Sequence route remains blocked
+
+The official mapper accepts representative 16S FASTA plus matching feature
+abundances. The supplied local ASV datasets had exact FASTA/table correspondence
+and were Illumina/DADA2-derived. The native one-feature trial reached alignment
+and APPLES placement, then failed the mapper's reference-tree consistency check;
+no function table was produced. `faprotax2.mode: sequence` is therefore explicitly
+rejected. It has no verified pipeline usage example or representative-feature
+input schema exposed by this implementation. The
+[sequence trial report](patch/faprotax2-native-sequence-trial.md) records the
+portability fixes, failed gate and local reproducibility artifacts.
 
 ---
 
@@ -564,7 +689,7 @@ on each target host for local performance evidence.
 |---|---|
 | `-c, --config PATH` | Path to YAML config (default: `config.yml`) |
 | `-o, --output-dir PATH` | Override output directory |
-| `-m, --modules LIST` | Comma-separated modules: `qc,alpha,beta,composition,ordination,shared,kreport,faprotax` |
+| `-m, --modules LIST` | Comma-separated modules: `qc,alpha,beta,composition,ordination,shared,kreport,faprotax,faprotax2` |
 | `--validate-only` | Run the same requested-module preflight checks without writing to disk |
 | `--keep-going` | Continue executing remaining modules if one fails |
 | `--refresh-taxonomy` | Enable online NCBI queries to resolve missing TaxIDs |
@@ -598,6 +723,10 @@ multi-process cache locking. The project does not include differential
 abundance, phylogenetic UniFrac, FAPROTAX2-db, PICRUSt2, the upstream Pavian
 Shiny application, or biological validation of cohort statistics or
 species-level calls. Version `0.5.0` follows `0.4.9`.
+
+Unreleased changes add the opt-in FAPROTAX-mapper 2.0 taxonomy backend and
+manifest revision 6. Sequence mode remains gated by the failed native proof;
+no version bump or release tag is included in this migration.
 
 See [CHANGELOG.md](CHANGELOG.md) for release history and [CITATION.cff](CITATION.cff)
 for citation metadata. The code is available under the [MIT License](LICENSE).

@@ -6,6 +6,8 @@
 #   Rscript analysis/install_packages.R            # Check only (exits non-zero if missing)
 #   Rscript analysis/install_packages.R --install  # Install missing packages from CRAN
 #   Rscript analysis/install_packages.R --restore  # Restore the committed renv lock
+# Optional external FAPROTAX2 runtime (separate Windows library and assets):
+#   Rscript --vanilla tests/setup_faprotax2_windows.R
 # =============================================================================
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -55,6 +57,7 @@ installed <- rownames(installed.packages())
 missing_pkgs <- setdiff(REQUIRED_PACKAGES, installed)
 
 cat("=== ONT wf-16s Pipeline Dependency Check ===\n")
+if (include_modules) cat("Optional FAPROTAX2 mapper assets/library: use tests/setup_faprotax2_windows.R separately.\n")
 cat(sprintf("Total required packages: %d\n", length(REQUIRED_PACKAGES)))
 cat(sprintf("Installed: %d\n", length(REQUIRED_PACKAGES) - length(missing_pkgs)))
 cat(sprintf("Missing:   %d\n\n", length(missing_pkgs)))

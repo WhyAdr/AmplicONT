@@ -16,6 +16,7 @@ their original scope; the current implementation and usage are documented in the
 - [Sequence feasibility and native portability trial](faprotax2-sequence-feasibility.md)
 - [Final native sequence trial and blocked gate](faprotax2-native-sequence-trial.md)
 - [Independent two-backend comparison and remaining limits](faprotax2-validation-report.md)
+- [Delivery gates, optional native setup and reproducibility](faprotax2-delivery-validation.md)
 
 ## Version 0.5.0: Kraken2 and Bracken
 
