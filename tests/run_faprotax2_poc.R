@@ -59,7 +59,7 @@ rscript <- file.path(R.home("bin"), "Rscript.exe")
 preflight <- processx::run(
   rscript, c("--no-save", "--no-restore", "-e",
              "cat(R.version.string,'\\n'); for(p in c('castor','naturalsort','optparse','stringr')) cat(p,as.character(packageVersion(p)),'\\n',sep='\\t'); cat(paste(.libPaths(),collapse='\\n'))"),
-  env = child_env, wd = repo, timeout = 30000, error_on_status = FALSE
+  env = child_env, wd = repo, timeout = 30, error_on_status = FALSE
 )
 writeLines(preflight$stdout, file.path(out, "runtime preflight.txt"), useBytes = TRUE)
 writeLines(preflight$stderr, file.path(out, "runtime preflight stderr.txt"), useBytes = TRUE)

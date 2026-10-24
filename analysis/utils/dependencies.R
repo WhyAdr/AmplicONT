@@ -22,7 +22,9 @@ RUNTIME_PACKAGES <- c(
 )
 
 MODULE_PACKAGES <- list(
-  faprotax = "microeco"
+  faprotax = "microeco",
+  # The mapper's optional dependencies are checked in its isolated child library.
+  faprotax2 = character(0)
 )
 MICROECO_MIN_VERSION <- "2.3.0"
 

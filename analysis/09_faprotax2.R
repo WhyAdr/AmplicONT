@@ -52,14 +52,16 @@ validate_faprotax2_runtime <- function(cfg) {
   rscript <- file.path(R.home("bin"), if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript")
   env <- faprotax2_child_environment(cfg)
   code <- paste(
-    'pkgs <- c("castor","naturalsort","optparse","stringr","Rcpp","Matrix","RSpectra","jsonlite");',
+    'pkgs <- c("castor","naturalsort","optparse","stringr","Rcpp","Matrix","RSpectra","jsonlite","digest");',
     'for(p in pkgs) if(!requireNamespace(p,quietly=TRUE)) stop(paste("Missing mapper dependency",p));',
     'if(as.character(packageVersion("castor")) != "1.8.7" || as.character(packageVersion("naturalsort")) != "0.1.3") stop("Expected audited castor 1.8.7 and naturalsort 0.1.3");',
+    'pkgs <- sort(unique(c(pkgs,loadedNamespaces())));',
     'records <- lapply(pkgs,function(p) list(package=p,version=as.character(packageVersion(p)),path=find.package(p),description_sha256=digest::digest(file=file.path(find.package(p),"DESCRIPTION"),algo="sha256")));',
     'cat(jsonlite::toJSON(list(r=R.version.string,platform=R.version$platform,packages=records),auto_unbox=TRUE))'
   )
   result <- processx::run(rscript, c("--vanilla", "-e", code), env = env,
-                          timeout = 30000, error_on_status = FALSE, cleanup_tree = TRUE)
+                          timeout = 30, error_on_status = FALSE, cleanup_tree = TRUE)
+  if (isTRUE(result$timeout)) stop("FAPROTAX2 dependency preflight timed out after 30 seconds.", call. = FALSE)
   if (result$status != 0L) {
     stop(sprintf("FAPROTAX2 dependency preflight failed: %s", trimws(result$stderr)), call. = FALSE)
   }
@@ -128,6 +130,10 @@ validate_faprotax2_matrices <- function(states, probabilities, abundance, counts
       anyNA(counts) || any(!is.finite(counts) | counts < 0)) {
     stop("FAPROTAX2 matrices contain invalid states, probabilities or abundances.", call. = FALSE)
   }
+  if (any((states == 1 & probabilities < 0.50000001) |
+          (states == 0 & probabilities > 0.49999999), na.rm = TRUE)) {
+    stop("FAPROTAX2 states disagree with the configured probability thresholds.", call. = FALSE)
+  }
   binary <- states
   binary[is.na(binary)] <- 0
   expected <- t(binary) %*% counts
@@ -140,7 +146,10 @@ validate_faprotax2_matrices <- function(states, probabilities, abundance, counts
 summarize_faprotax2_coverage <- function(states, counts, context) {
   present <- rowSums(states == 1, na.rm = TRUE) > 0
   unknown_without_presence <- !present & rowSums(is.na(states)) > 0
+  total <- colSums(context$count_matrix[, colnames(counts), drop = FALSE])
   data.frame(SampleID = colnames(counts),
+    InputTaxonAbundance = total,
+    ExcludedInputAbundance = total - colSums(counts),
     EligibleTaxonAbundance = colSums(counts),
     PredictedPresenceAbundance = colSums(counts[present, , drop = FALSE]),
     NoPredictedPresenceAbundance = colSums(counts[!present, , drop = FALSE]),
@@ -180,11 +189,14 @@ run_faprotax2 <- function(context, runner = processx::run, runtime = NULL) {
     "-o", raw[1], "-e", raw[2], "-q", raw[3], "-r", raw[4],
     "--normalize", "none", "--hsp_algorithm", "config", "--unknown_ref_states", "config",
     "--placement_failure", "error", "--Nthreads", as.character(cfg$faprotax2$nthreads))
-  process <- runner(runtime$rscript, args, env = runtime$env,
-                    timeout = cfg$faprotax2$timeout_seconds * 1000,
+  process <- runner(runtime$rscript, args, env = runtime$env, wd = out,
+                    timeout = cfg$faprotax2$timeout_seconds,
                     error_on_status = FALSE, cleanup_tree = TRUE)
   writeLines(process$stdout, log_paths[1], useBytes = TRUE)
   writeLines(process$stderr, log_paths[2], useBytes = TRUE)
+  if (isTRUE(process$timeout)) {
+    stop(sprintf("FAPROTAX2 mapper timed out after %s seconds.", cfg$faprotax2$timeout_seconds), call. = FALSE)
+  }
   if (!identical(process$status, 0L)) {
     stop(sprintf("FAPROTAX2 mapper exited %s: %s", process$status,
                  paste(tail(strsplit(process$stderr, "\n", fixed = TRUE)[[1]], 8), collapse = "\n")), call. = FALSE)
@@ -203,18 +215,43 @@ run_faprotax2 <- function(context, runner = processx::run, runtime = NULL) {
   summary_paths <- file.path(out, c("faprotax2_function_abundance.tsv", "faprotax2_coverage.tsv"))
   write.table(long, summary_paths[1], sep = "\t", row.names = FALSE, quote = FALSE, fileEncoding = "UTF-8")
   write.table(coverage, summary_paths[2], sep = "\t", row.names = FALSE, quote = FALSE, fileEncoding = "UTF-8")
+  pairs <- which(states == 1, arr.ind = TRUE)
+  assignments <- data.frame(FeatureID = rownames(states)[pairs[, 1]],
+    Function = colnames(states)[pairs[, 2]], PredictedState = rep(1, nrow(pairs)),
+    AnnotationProbability = probabilities[pairs], stringsAsFactors = FALSE)
+  assignments_path <- file.path(out, "faprotax2_feature_function_assignments.tsv")
+  write.table(assignments, assignments_path, sep = "\t", row.names = FALSE, quote = FALSE,
+               fileEncoding = "UTF-8")
+  totals <- rowSums(abundance)
+  selected <- head(rownames(abundance)[order(-totals, rownames(abundance))], cfg$faprotax2$top_n_functions)
+  plot_data <- long[long$Function %in% selected, , drop = FALSE]
+  plot_data$Function <- factor(plot_data$Function, levels = rev(selected))
+  plot <- ggplot2::ggplot(plot_data, ggplot2::aes(x = Function, y = EstimatedFunctionAbundance)) +
+    ggplot2::geom_col(fill = "#267b86") + ggplot2::coord_flip() +
+    ggplot2::facet_wrap(~SampleID, scales = "free_y") +
+    ggplot2::labs(title = "FAPROTAX2 taxonomy predictions", x = NULL,
+      y = "Estimated function abundance (input taxon-count basis)",
+      subtitle = "Independent functions overlap; these are phenotype predictions, not measured activity.") +
+    theme_amplicon()
+  plot_path <- file.path(out, "faprotax2_top_functions.png")
+  save_plot(plot_path, plot, width = 10, height = max(5, 0.25 * length(selected) + 2))
   provenance_path <- file.path(out, "faprotax2_provenance.json")
   jsonlite::write_json(list(schema_version = 1L, mapper = "FAPROTAX-mapper", mapper_version = "2.0 beta",
     mode = "taxonomy", mapper_modified = FALSE, archive_sha256 = FAPROTAX2_ARCHIVE_SHA256,
     resources = runtime$resources, runtime = runtime$dependency_runtime,
     executable = runtime$rscript, arguments = json_array(args),
+    working_directory = out, timeout_seconds = cfg$faprotax2$timeout_seconds,
+    library_selection = "Optional mapper_library is prepended; shared project and R libraries remain available; resolved dependency paths and hashes are recorded",
     count_basis = context$count_basis, normalize = "none", probability_weighting = FALSE,
     hsp_algorithm = "config", unknown_ref_states = "config", nthreads = cfg$faprotax2$nthreads,
     input_sha256 = compute_file_hash(input_path),
+    taxonomy_translation = "NCBI superkingdom,phylum,class,order,family,genus,species; intervening kingdom omitted; Unknown/Unclassified/NA become empty fields; original TaxonPath retained",
+    denominator_definition = "EligibleTaxonAbundance sums positive Bacteria/Archaea taxon rows; excluded input includes unclassified and non-prokaryotic rows; no normalization applied",
     interpretation = paste("Overlapping taxon-based phenotype predictions; no evidence of genes, expression or measured activity.",
       "Unrecognized taxonomies may receive broad fallback predictions. Coverage means positive function states, not successful taxonomic placement.",
       "Annotation probabilities are unitless; estimated abundances sum the input taxon-count basis without probability weighting.")),
     provenance_path, auto_unbox = TRUE, pretty = TRUE, null = "null")
-  list(status = "completed", outputs = c(input_path, source_path, raw, log_paths, summary_paths, provenance_path),
+  list(status = "completed", outputs = c(input_path, source_path, raw, log_paths, summary_paths,
+                                         assignments_path, plot_path, provenance_path),
        warnings = "FAPROTAX2 predicts overlapping phenotypes from taxonomic placement; unknown lineages may receive broad fallback predictions.")
 }

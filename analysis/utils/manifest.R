@@ -690,7 +690,18 @@ validate_manifest_v2_revision_core <- function(manifest, physical_root = NULL,
     manifest_fail("modules", "expected a uniquely named object.")
   }
   registry <- c("qc", "alpha", "beta", "composition", "ordination", "shared", "kreport", "faprotax")
-  if (identical(revision, 6L)) registry <- c(registry, "faprotax2")
+  if (identical(revision, 6L)) {
+    registry <- c(registry, "faprotax2")
+    if ("faprotax2" %in% array_values(manifest$cli$modules)) {
+      resources <- manifest$inputs$faprotax2_resources
+      roles <- c("mapper_script", "default_config.tsv", "reference_alignments_sanitized_subset.fasta.gz",
+                 "reference_alignments_sanitized.fasta.gz", "reference2species_and_traits.tsv", "tree_model.txt", "tree.tre")
+      if (!is.list(resources) || !setequal(names(resources), roles) || anyDuplicated(names(resources))) {
+        manifest_fail("inputs.faprotax2_resources", "expected exact audited mapper/reference resource inventory.")
+      }
+      for (role in roles) validate_manifest_fingerprint(resources[[role]], paste0("inputs.faprotax2_resources.", role))
+    }
+  }
   if (!identical(sort(names(manifest$modules)), sort(registry))) {
     manifest_fail("modules", "module keys must exactly match the maintained registry.")
   }

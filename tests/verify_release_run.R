@@ -387,6 +387,11 @@ if ("faprotax" %in% expected_modules) {
   }
 }
 
+if ("faprotax2" %in% expected_modules) {
+  source(file.path(repo_root, "tests", "verify_faprotax2_run.R"))
+  verify_faprotax2_run(root, manifest)
+}
+
 # 1. Reconciliation table verification
 reconciliation <- read.delim(
   file.path(root, "01_QC/classification_reconciliation.tsv"),

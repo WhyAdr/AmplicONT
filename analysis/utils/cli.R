@@ -25,7 +25,7 @@ get_cli_parser <- function() {
       type = "character",
       default = NULL,
       dest = "modules",
-      help = "Comma-separated list of modules to run (e.g. qc,alpha,composition,kreport,faprotax)"
+      help = "Comma-separated modules (e.g. qc,alpha,composition,kreport,faprotax,faprotax2); functional modules are opt-in"
     ),
     optparse::make_option(
       c("--krona"),

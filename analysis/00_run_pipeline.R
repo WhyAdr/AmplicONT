@@ -31,9 +31,9 @@ main <- function() {
                  "kreport.R", "atomic_io.R", "module_result.R", "preflight.R")) {
     source(file.path(script_dir, "utils", file))
   }
-  for (file in sprintf("%02d_%s.R", 1:8, c("qc_diagnostics", "alpha_diversity",
+  for (file in sprintf("%02d_%s.R", 1:9, c("qc_diagnostics", "alpha_diversity",
       "beta_diversity", "taxa_composition", "ordination", "shared_taxa",
-      "kreport_pavian", "faprotax"))) source(file.path(script_dir, file))
+      "kreport_pavian", "faprotax", "faprotax2"))) source(file.path(script_dir, file))
 
 cli_opts <- parse_cli_args()
 cfg <- tryCatch(load_config(cli_opts$config, cli_opts = cli_opts),
@@ -43,7 +43,7 @@ cfg$pipeline_root <- repo_root
 module_registry <- list(
   qc = run_qc, alpha = run_alpha, beta = run_beta,
   composition = run_taxa_composition, ordination = run_ordination,
-  shared = run_shared_taxa, kreport = run_kreport, faprotax = run_faprotax
+  shared = run_shared_taxa, kreport = run_kreport, faprotax = run_faprotax, faprotax2 = run_faprotax2
 )
 requested_modules <- cfg$cli$modules
 invalid_modules <- setdiff(requested_modules, names(module_registry))
@@ -301,7 +301,8 @@ rebase_output <- function(cfg, root) {
     qc = file.path(root, "01_QC"), alpha = file.path(root, "02_Alpha_Diversity"),
     beta = file.path(root, "03_Beta_Diversity"), composition = file.path(root, "04_Taxa_Composition"),
     ordination = file.path(root, "05_Ordination"), shared_taxa = file.path(root, "06_Shared_Taxa"),
-    kreport = file.path(root, "07_Kreport"), faprotax = file.path(root, "08_FAPROTAX")
+    kreport = file.path(root, "07_Kreport"), faprotax = file.path(root, "08_FAPROTAX"),
+    faprotax2 = file.path(root, "09_FAPROTAX2")
   )
   cfg$output$manifest_file <- file.path(root, "run_manifest.json")
   cfg$output$resolved_config_file <- file.path(root, "resolved_config.yml")
@@ -336,7 +337,15 @@ for (module_name in requested_modules) {
   }), error = function(e) list(status = "failed", error = conditionMessage(e), outputs = character(0)))
 
   result <- tryCatch(validate_module_result(result, module_name, module_stage), error = function(e) {
-    list(status = "failed", error = paste("Module result contract violation:", conditionMessage(e)),
+    diagnostic <- paste("Module result contract violation:", conditionMessage(e))
+    # Partial staging is still rejected and discarded. Preserve the actual
+    # process error as well, rather than hiding it behind that census failure.
+    if (is.list(result) && identical(result$status, "failed") &&
+        is.character(result$error) && length(result$error) == 1L &&
+        !is.na(result$error) && nzchar(result$error)) {
+      diagnostic <- paste(result$error, diagnostic, sep = "\n")
+    }
+    list(status = "failed", error = diagnostic,
          outputs = character(0))
   })
 
@@ -569,7 +578,7 @@ manifest <- list(
   git_commit = source_info$git_commit, git_dirty = source_info$git_dirty,
   source_digest_sha256 = source_info$source_digest_sha256,
   source_files = source_info$source_files,
-  schema_version = 2L, schema_revision = 5L, config_schema_version = cfg$schema_version,
+  schema_version = 2L, schema_revision = 6L, config_schema_version = cfg$schema_version,
   count_basis = context$count_basis,
   population_accounting = if (is_kraken) context$sample_accounting else NULL,
   run_status = if (any_failed) "failed" else "completed",

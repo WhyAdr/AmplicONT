@@ -1,7 +1,9 @@
 # Independent contract tests for the official FAPROTAX-mapper 2.0 adapter.
 source(file.path("..", "..", "analysis", "utils", "config.R"))
+source(file.path("..", "..", "analysis", "utils", "dependencies.R"))
 source(file.path("..", "..", "analysis", "utils", "io.R"))
 source(file.path("..", "..", "analysis", "utils", "preflight.R"))
+source(file.path("..", "..", "analysis", "utils", "plotting.R"))
 source(file.path("..", "..", "analysis", "utils", "manifest.R"))
 source(file.path("..", "..", "analysis", "09_faprotax2.R"))
 
@@ -44,7 +46,7 @@ make_faprotax2_test_context <- function(output_dir, include_prokaryotes = TRUE) 
       faprotax2 = list(
         mode = "taxonomy", mapper_path = "mapper path with spaces/faprotax.R",
         reference_dir = "reference path with spaces", mapper_library = NULL,
-        nthreads = 1L, timeout_seconds = 10L
+        nthreads = 1L, timeout_seconds = 10L, top_n_functions = 20L
       )
     ),
     samples = samples,
@@ -145,6 +147,21 @@ test_that("mapper matrix validation rejects invalid states, probabilities and ab
     altered$abundance, altered$counts))
 
   altered <- fixture
+  altered$states[1L, 1L] <- 1
+  altered$probabilities[1L, 1L] <- 0.5
+  expect_error(validate_faprotax2_matrices(altered$states, altered$probabilities,
+    altered$abundance, altered$counts), "probability thresholds")
+
+  altered <- fixture
+  altered$states[1L, 1L] <- 1
+  altered$probabilities[1L, 1L] <- 0.50000001
+  binary <- altered$states
+  binary[is.na(binary)] <- 0
+  altered$abundance <- t(binary) %*% altered$counts
+  expect_invisible(validate_faprotax2_matrices(altered$states, altered$probabilities,
+    altered$abundance, altered$counts))
+
+  altered <- fixture
   altered$abundance[1L, 1L] <- altered$abundance[1L, 1L] + 0.25
   expect_error(validate_faprotax2_matrices(altered$states, altered$probabilities,
     altered$abundance, altered$counts), "differs from unweighted states")
@@ -182,21 +199,30 @@ test_that("mapper matrix validation rejects feature, function and sample identif
 
 test_that("coverage reports input count basis and separates predicted presence from unknowns", {
   fixture <- make_faprotax2_matrix_fixture()
-  context <- list(count_basis = "bracken_species_estimates")
+  input_context <- make_faprotax2_test_context(tempdir())
+  context <- list(count_basis = "bracken_species_estimates",
+                  count_matrix = input_context$count_matrix)
   coverage <- summarize_faprotax2_coverage(fixture$states, fixture$counts, context)
 
   expect_identical(names(coverage), c(
-    "SampleID", "EligibleTaxonAbundance", "PredictedPresenceAbundance",
+    "SampleID", "InputTaxonAbundance", "ExcludedInputAbundance",
+    "EligibleTaxonAbundance", "PredictedPresenceAbundance",
     "NoPredictedPresenceAbundance", "UnknownWithoutPresenceAbundance",
     "KnownAbsenceOnlyAbundance", "EligibleTaxa", "TaxaWithPredictedPresence", "CountBasis"
   ))
   expect_false(any(grepl("placement|mapped_reads|functionmappedreads", names(coverage), ignore.case = TRUE)))
   expect_identical(coverage$SampleID, c("Rényi_α", "Control_β"))
+  expect_equal(coverage$InputTaxonAbundance, c(18, 8))
+  expect_equal(coverage$ExcludedInputAbundance, c(11, 2))
   expect_equal(coverage$EligibleTaxonAbundance, c(7, 6))
+  expect_equal(coverage$EligibleTaxonAbundance + coverage$ExcludedInputAbundance,
+               coverage$InputTaxonAbundance)
   expect_equal(coverage$PredictedPresenceAbundance, c(4, 3))
   expect_equal(coverage$NoPredictedPresenceAbundance, c(3, 3))
   expect_equal(coverage$UnknownWithoutPresenceAbundance, c(2, 1))
   expect_equal(coverage$KnownAbsenceOnlyAbundance, c(1, 2))
+  expect_equal(coverage$UnknownWithoutPresenceAbundance + coverage$KnownAbsenceOnlyAbundance,
+               coverage$NoPredictedPresenceAbundance)
   expect_equal(coverage$EligibleTaxa, c(3, 3))
   expect_equal(coverage$TaxaWithPredictedPresence, c(1, 1))
   expect_identical(coverage$CountBasis, rep("bracken_species_estimates", 2L))
@@ -263,16 +289,18 @@ test_that("taxonomy adapter passes argument vectors and validates independent ma
     resources = list(mapper_script = list(path = "official mapper", sha256 = "fixture-hash")),
     dependency_runtime = list(r = "R 4.5.3", packages = list())
   )
-  runner <- function(command, args, env, timeout, error_on_status, cleanup_tree) {
+  runner <- function(command, args, env, wd, timeout, error_on_status, cleanup_tree) {
     observed$command <<- command
     observed$args <<- args
     observed$env <<- env
+    observed$wd <<- wd
     observed$timeout <<- timeout
     observed$error_on_status <<- error_on_status
     observed$cleanup_tree <<- cleanup_tree
     expect_identical(command, runtime$rscript)
     expect_true(all(c("--vanilla", "--normalize", "none", "--Nthreads", "1") %in% args))
     expect_identical(env, runtime$env)
+    expect_identical(wd, output_dir)
 
     value_after <- function(flag) args[match(flag, args) + 1L]
     input <- read.delim(value_after("-i"), check.names = FALSE, stringsAsFactors = FALSE)
@@ -295,7 +323,7 @@ test_that("taxonomy adapter passes argument vectors and validates independent ma
   result <- run_faprotax2(context, runner = runner, runtime = runtime)
   expect_identical(result$status, "completed")
   expect_true(all(file.exists(result$outputs)))
-  expect_true(observed$timeout == 10000)
+  expect_identical(observed$timeout, 10L)
   expect_identical(observed$error_on_status, FALSE)
   expect_identical(observed$cleanup_tree, TRUE)
 
@@ -313,6 +341,19 @@ test_that("taxonomy adapter passes argument vectors and validates independent ma
   expect_identical(function_abundance$CountBasis,
                    rep("minimap2_alignments", 4L))
   expect_true(all(grepl("sum_of_input_taxon_abundances", function_abundance$Unit, fixed = TRUE)))
+
+  assignment_path <- file.path(output_dir, "faprotax2_feature_function_assignments.tsv")
+  assignments <- read.delim(assignment_path, check.names = FALSE, stringsAsFactors = FALSE)
+  expect_identical(names(assignments),
+    c("FeatureID", "Function", "PredictedState", "AnnotationProbability"))
+  expect_identical(assignments$FeatureID, c(expected_ids[1L], expected_ids[1L], expected_ids[2L]))
+  expect_identical(assignments$Function, c("nitrification", "methanogenesis", "methanogenesis"))
+  expect_identical(assignments$PredictedState, c(1L, 1L, 1L))
+  expect_equal(assignments$AnnotationProbability, c(0.9, 0.9, 0.8))
+
+  plot_outputs <- result$outputs[grepl("[.]png$", result$outputs)]
+  expect_length(plot_outputs, 1L)
+  expect_true(file.info(plot_outputs)$size > 0)
 
   coverage <- read.delim(file.path(output_dir, "faprotax2_coverage.tsv"),
                          check.names = FALSE, stringsAsFactors = FALSE)
@@ -342,4 +383,90 @@ test_that("a nonzero mapper exit is surfaced with its stderr", {
   expect_true(file.exists(file.path(context$config$output$dirs$faprotax2, "mapper_stderr.txt")))
   expect_false(file.exists(file.path(context$config$output$dirs$faprotax2,
                                      "faprotax2_function_abundance.tsv")))
+})
+
+test_that("the real processx adapter enforces mapper timeouts in seconds", {
+  root <- tempfile("faprotax2 process timeout ")
+  dir.create(root)
+  output_dir <- file.path(root, "module output")
+  mapper <- file.path(root, "slow mapper.R")
+  writeLines(c("Sys.sleep(30)",
+               'writeLines("completed", "completion marker.txt")'), mapper)
+
+  context <- make_faprotax2_test_context(output_dir)
+  context$config$faprotax2$mapper_path <- mapper
+  context$config$faprotax2$timeout_seconds <- 1L
+  rscript <- file.path(R.home("bin"),
+                       if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript")
+  runtime <- list(rscript = rscript, env = Sys.getenv(), resources = list(),
+                  dependency_runtime = list())
+
+  elapsed <- system.time({
+    result <- tryCatch(run_faprotax2(context, runtime = runtime), error = identity)
+  })[["elapsed"]]
+
+  expect_s3_class(result, "error")
+  expect_match(conditionMessage(result), "timeout|timed out", ignore.case = TRUE)
+  expect_lt(elapsed, 15)
+  expect_false(file.exists(file.path(output_dir, "completion marker.txt")))
+  expect_false(file.exists(file.path(output_dir, "faprotax2_function_abundance.tsv")))
+})
+
+test_that("FAPROTAX2 is opt-in and has validated, path-resolved defaults", {
+  cfg <- get_default_config()
+  expect_false("faprotax2" %in% parse_requested_modules(NULL))
+  expect_identical(parse_requested_modules("faprotax2"), "faprotax2")
+  expect_length(get_module_packages("faprotax2"), 0L)
+  expect_identical(cfg$faprotax2$mode, "taxonomy")
+  expect_null(cfg$faprotax2$mapper_path)
+  expect_null(cfg$faprotax2$reference_dir)
+  expect_null(cfg$faprotax2$mapper_library)
+  expect_identical(cfg$faprotax2$nthreads, 1L)
+  expect_identical(cfg$faprotax2$timeout_seconds, 600L)
+  expect_identical(cfg$faprotax2$top_n_functions, 20L)
+  expect_no_error(validate_config(cfg))
+
+  invalid <- cfg
+  invalid$faprotax2$mode <- "taxonomy_and_sequence"
+  expect_error(validate_config(invalid), "faprotax2.mode")
+  invalid <- cfg
+  invalid$faprotax2$top_n_functions <- 0L
+  expect_error(validate_config(invalid), "faprotax2.top_n_functions")
+
+  root <- tempfile("faprotax2 config paths ")
+  dir.create(root)
+  config_path <- file.path(root, "config.yml")
+  yaml::write_yaml(list(faprotax2 = list(
+    mode = "taxonomy", mapper_path = "mapper path/faprotax.R",
+    reference_dir = "reference data", mapper_library = "isolated R library"
+  )), config_path)
+  resolved <- load_config(config_path, cli_opts = list(modules = "faprotax2"))
+  expect_identical(resolved$cli$modules, "faprotax2")
+  expect_identical(resolved$faprotax2$mapper_path,
+                   normalizePath(file.path(root, "mapper path/faprotax.R"), winslash = "/", mustWork = FALSE))
+  expect_identical(resolved$faprotax2$reference_dir,
+                   normalizePath(file.path(root, "reference data"), winslash = "/", mustWork = FALSE))
+  expect_identical(resolved$faprotax2$mapper_library,
+                   normalizePath(file.path(root, "isolated R library"), winslash = "/", mustWork = FALSE))
+})
+
+test_that("FAPROTAX2 runtime asset checks reject missing and corrupt pinned assets", {
+  missing <- get_default_config()
+  missing$faprotax2$mapper_path <- file.path(tempdir(), "missing mapper.R")
+  missing$faprotax2$reference_dir <- file.path(tempdir(), "missing reference directory")
+  expect_error(faprotax2_resource_inventory(missing), "not an existing regular file")
+
+  root <- tempfile("synthetic corrupt faprotax2 assets ")
+  ref <- file.path(root, "reference")
+  dir.create(ref, recursive = TRUE)
+  mapper <- file.path(root, "faprotax.R")
+  writeLines("synthetic mapper bytes", mapper)
+  for (asset in names(FAPROTAX2_RELEASE_HASHES)[-1L]) {
+    writeLines(paste("synthetic bytes for", asset), file.path(ref, asset))
+  }
+  corrupt <- get_default_config()
+  corrupt$faprotax2$mapper_path <- mapper
+  corrupt$faprotax2$reference_dir <- ref
+  expect_error(faprotax2_resource_inventory(corrupt),
+               "release hash mismatch for 'mapper_script'")
 })

@@ -90,6 +90,17 @@ faprotax:
   # Plot selection only; all non-zero functions remain in the TSV output.
   top_n_functions: 20
 
+# Optional official mapper 2.0, requested with --modules faprotax2.
+# Paths resolve relative to this YAML file; install assets separately.
+faprotax2:
+  mode: taxonomy
+  mapper_path: null
+  reference_dir: null
+  mapper_library: null
+  nthreads: 1
+  timeout_seconds: 600
+  top_n_functions: 20
+
 # Optional Krona export from the kreport tree.
 krona:
   enabled: false

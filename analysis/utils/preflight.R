@@ -62,6 +62,9 @@ inventory_inputs <- function(cfg, bamstats = NULL) {
     abundance_table = fingerprint_file(cfg$input$abundance_table, "input.abundance_table"),
     params_json = fingerprint_file(cfg$input$params_json, "input.params_json")
   )
+  if ("faprotax2" %in% cfg$cli$modules) {
+    records$faprotax2_resources <- faprotax2_resource_inventory(cfg)
+  }
   if (!is.null(cfg$input$metadata)) {
     records$metadata <- fingerprint_file(cfg$input$metadata, "input.metadata")
   }
@@ -148,6 +151,7 @@ assert_inputs_unchanged <- function(inventory, allow_taxonomy_cache_change = FAL
   flatten <- c(
     inventory[c("config_file", "abundance_table", "params_json", "metadata", "taxonomy_cache",
                 "phylogenetic_tree", "phylogenetic_tip_map", "cohort_merge_manifest")],
+    inventory$faprotax2_resources,
     inventory$cohort_sources,
     inventory$assignments,
     inventory$kraken2_reports,
@@ -407,6 +411,9 @@ validate_output_root <- function(cfg, repo_root, extra_paths = character(0)) {
               unlist(cfg$input$kraken2_reports, use.names = FALSE),
               unlist(cfg$input$bracken_reports, use.names = FALSE),
               unlist(cfg$input$params_by_sample, use.names = FALSE), extra_paths)
+  if ("faprotax2" %in% cfg$cli$modules) {
+    inputs <- c(inputs, faprotax2_asset_paths(cfg), cfg$faprotax2$mapper_library)
+  }
   if (!is.null(cfg$input$cohort_merge_manifest)) {
     sources <- validate_cohort_merge_input(cfg)
     inputs <- c(inputs, vapply(sources, `[[`, character(1), "path"))
@@ -560,6 +567,7 @@ run_module_preflight <- function(context, modules, resolver_runner = NULL) {
     }
   }
   if ("faprotax" %in% modules) invisible(validate_faprotax_runtime())
+  if ("faprotax2" %in% modules) invisible(validate_faprotax2_runtime(cfg))
   if ("kreport" %in% modules) {
     python <- tryCatch(find_python(), error = function(e) preflight_error("E_KREPORT_PREFLIGHT", e$message))
     script <- file.path(cfg$pipeline_root, "analysis", "utils", "ncbi_taxonomy.py")

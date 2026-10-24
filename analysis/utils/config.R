@@ -245,6 +245,17 @@ validate_config <- function(cfg) {
   }
   assert_scalar_number(cfg$faprotax$top_n_functions, "faprotax.top_n_functions",
                        lower = 1, upper = 10000, integer = TRUE)
+  if (!is.list(cfg$faprotax2) || !is.character(cfg$faprotax2$mode) ||
+      length(cfg$faprotax2$mode) != 1L || is.na(cfg$faprotax2$mode) ||
+      !cfg$faprotax2$mode %in% c("taxonomy", "sequence")) {
+    stop("'faprotax2.mode' must be taxonomy or sequence.", call. = FALSE)
+  }
+  for (key in c("mapper_path", "reference_dir", "mapper_library")) {
+    if (!is.null(cfg$faprotax2[[key]])) assert_nonempty_string(cfg$faprotax2[[key]], paste0("faprotax2.", key))
+  }
+  assert_scalar_number(cfg$faprotax2$nthreads, "faprotax2.nthreads", lower = 1, upper = 64, integer = TRUE)
+  assert_scalar_number(cfg$faprotax2$timeout_seconds, "faprotax2.timeout_seconds", lower = 1, upper = 86400, integer = TRUE)
+  assert_scalar_number(cfg$faprotax2$top_n_functions, "faprotax2.top_n_functions", lower = 1, upper = 500, integer = TRUE)
   if (!is.character(cfg$beta$distances) || length(cfg$beta$distances) == 0L ||
       any(!cfg$beta$distances %in% c("bray", "jaccard")) || anyDuplicated(cfg$beta$distances)) {
     stop("'beta.distances' must contain unique values drawn from: bray, jaccard.", call. = FALSE)
@@ -360,6 +371,10 @@ get_default_config <- function() {
     ),
     faprotax = list(
       top_n_functions = 20L
+    ),
+    faprotax2 = list(
+      mode = "taxonomy", mapper_path = NULL, reference_dir = NULL, mapper_library = NULL,
+      nthreads = 1L, timeout_seconds = 600L, top_n_functions = 20L
     ),
     krona = list(
       enabled = FALSE,
@@ -559,6 +574,9 @@ load_config <- function(config_path = "config.yml", cli_opts = list()) {
   }
 
   cfg$taxonomy$cache <- resolve_path(cfg$taxonomy$cache, config_dir)
+  for (key in c("mapper_path", "reference_dir", "mapper_library")) {
+    cfg$faprotax2[[key]] <- resolve_path(cfg$faprotax2[[key]], config_dir)
+  }
 
   # Resolve base output directory
   base_dir_context <- if (cli_output_dir_provided) getwd() else config_dir
@@ -574,7 +592,8 @@ load_config <- function(config_path = "config.yml", cli_opts = list()) {
     ordination = file.path(base_out, "05_Ordination"),
     shared_taxa = file.path(base_out, "06_Shared_Taxa"),
     kreport = file.path(base_out, "07_Kreport"),
-    faprotax = file.path(base_out, "08_FAPROTAX")
+    faprotax = file.path(base_out, "08_FAPROTAX"),
+    faprotax2 = file.path(base_out, "09_FAPROTAX2")
   )
 
   cfg$output$manifest_file <- file.path(base_out, "run_manifest.json")
